@@ -179,6 +179,22 @@ adminRouter.patch(
   }),
 );
 
+/** Delete every product and its children (options, values, variants, images, specs) in one shot. */
+adminRouter.delete(
+  '/products/all',
+  route(async (_req, res) => {
+    await prisma.$transaction(async (tx) => {
+      await tx.productImage.deleteMany();
+      await tx.productOptionValue.deleteMany();
+      await tx.productOption.deleteMany();
+      await tx.productVariant.deleteMany();
+      await tx.productSpec.deleteMany();
+      await tx.product.deleteMany();
+    });
+    res.json({ ok: true });
+  }),
+);
+
 // --- helpers ------------------------------------------------------------------------------------
 
 async function assertMediaExists(ids: Array<string | null>) {
