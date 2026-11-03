@@ -51,8 +51,11 @@ function safeEqual(a: string, b: string): boolean {
 /** Applied globally, after attachOwner/attachCustomer. A no-op for GET/HEAD/OPTIONS and for requests
  *  with no recognized session (guest checkout, login, registration all have no ambient cookie-borne
  *  authority to protect). Fails closed for every other authenticated, state-changing request. */
+const AUTH_ENDPOINTS = new Set(['/api/admin/auth/login', '/api/customer/auth/login', '/api/customer/auth/register']);
+
 export function requireCsrf(req: Request, _res: Response, next: NextFunction) {
   if (!MUTATING_METHODS.has(req.method)) return next();
+  if (AUTH_ENDPOINTS.has(req.path)) return next();
   const authed = Boolean(req.owner || req.customer);
   if (!authed) return next();
 
