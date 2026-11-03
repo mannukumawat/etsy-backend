@@ -27,6 +27,7 @@ import { adminReturnsRouter } from './routes/adminReturns.js';
 import { importExportRouter } from './routes/importExport.js';
 import { customerCancelRouter, customerReturnsRouter } from './routes/returns.js';
 import { translationsRouter } from './routes/translations.js';
+import { uiI18nAdminRouter, uiI18nPublicRouter } from './routes/uiI18n.js';
 import { stripHindiResponses, translateResponses } from './translations.js';
 import { publicSettingsRouter, settingsRouter } from './routes/settings.js';
 
@@ -99,6 +100,7 @@ export function createApp() {
   app.use('/api/admin/reviews', adminReviewsRouter);
   app.use('/api/admin/returns', adminReturnsRouter);
   app.use('/api/admin/translations', translationsRouter);
+  app.use('/api/admin/i18n', uiI18nAdminRouter);
   app.use('/api/admin', importExportRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/settings', publicSettingsRouter);
@@ -110,6 +112,7 @@ export function createApp() {
   app.use('/api/customer', customerRouter);
   app.use('/api/checkout', checkoutRouter);
   app.use('/api/orders', orderTrackRouter);
+  app.use('/api/i18n', uiI18nPublicRouter);
   app.use('/api/nav-links', publicNavLinksRouter);
   app.use('/api/collections', publicCollectionsRouter);
   app.use('/api', publicReviewsRouter);
