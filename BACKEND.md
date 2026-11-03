@@ -28,6 +28,7 @@ Two independent sessions, both signed JWT in httpOnly cookies:
 | `GET /api/settings` | Store identity/contact, enabled currencies, languages, shipping zone rates |
 | `GET /api/content/homepage`, `/api/content/pages/:key` | Published content, `{published:false,content:null}` if nothing published |
 | `GET /api/nav-links` | Active secondary-nav links |
+| `GET /api/collections` | Published collections with cover image and `showInNavigation` flag, ordered by display order |
 | `GET /api/collections/:slug` | Published collection, products resolved per section |
 | `POST /api/customer/auth/{register,login,logout}`, `GET /auth/me`, `POST /auth/password-reset/{request,confirm}` | Customer auth |
 | `POST /api/checkout/{totals,validate-coupon,orders}` | Server-calculated preview/coupon-check/order placement |
@@ -47,7 +48,7 @@ Orders: `/api/admin/orders...` (`/advance`, `/tracking`, `/cancel`, `/refund`, `
 Customers (read-only, derived): `/api/admin/customers...`.
 Dashboard: `/api/admin/dashboard?from=&to=` — computed live from real orders, no stored metrics table.
 Navigation: `/api/admin/nav-links...` (+ `/reorder`).
-Collections: `/api/admin/collections...` (+ `/:id/status` publish/unpublish).
+Collections: `/api/admin/collections...` (+ `/:id/status` publish/unpublish); each collection can be independently included in storefront navigation.
 
 Error shape everywhere: `{ error: { code, message, issues: [{path,message}] } }`.
 

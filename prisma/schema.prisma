@@ -664,6 +664,7 @@ model Collection {
   /// 'draft' | 'published'
   status        String    @default("draft")
   displayOrder  Int       @default(0)
+  showInNavigation Boolean @default(false)
   publishedAt   DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

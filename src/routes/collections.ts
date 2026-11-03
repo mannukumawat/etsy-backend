@@ -81,6 +81,7 @@ async function writeCollection(existingId: string | null, input: ReturnType<type
     heroImageId: input.heroImageId,
     heroColor: input.heroColor,
     displayOrder: input.displayOrder,
+    showInNavigation: input.showInNavigation,
   };
   await prisma.$transaction(async (tx) => {
     if (existingId) {
@@ -177,7 +178,7 @@ publicCollectionsRouter.get(
           const first = ids.map((id) => products.find((p) => p.id === id)).find((p) => p?.images[0]);
           if (first) image = mediaUrl(first.images[0].mediaId);
         }
-        return { slug: c.slug, title: { en: c.titleEn }, image };
+        return { slug: c.slug, title: { en: c.titleEn }, image, showInNavigation: c.showInNavigation };
       }),
     );
     res.json({ items });

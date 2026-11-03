@@ -609,6 +609,7 @@ export function toAdminCollection(c: CollectionRow) {
     heroColor: c.heroColor,
     status: c.status as 'draft' | 'published',
     displayOrder: c.displayOrder,
+    showInNavigation: c.showInNavigation,
     publishedAt: c.publishedAt ? c.publishedAt.toISOString() : null,
     circles: c.circles
       .sort((a, b) => a.position - b.position)

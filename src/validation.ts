@@ -627,6 +627,7 @@ export const collectionInputSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #F5ECE1.')
     .default('#F5ECE1'),
   displayOrder: z.number().int().min(0).max(100000).default(0),
+  showInNavigation: z.boolean().default(false),
   circles: z.array(collectionCircleInputSchema).max(12, 'Use at most 12 circles.').default([]),
   sections: z.array(collectionSectionInputSchema).min(1, 'Add at least one product section.').max(10, 'Use at most 10 sections.'),
 });
