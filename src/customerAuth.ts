@@ -34,7 +34,7 @@ export function issueCustomerSession(res: Response, customer: { id: string; emai
   });
   res.cookie(COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: env.isProd ? 'none' : 'lax',
     secure: env.isProd,
     maxAge: env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
@@ -43,7 +43,7 @@ export function issueCustomerSession(res: Response, customer: { id: string; emai
 }
 
 export function clearCustomerSession(res: Response) {
-  res.clearCookie(COOKIE, { httpOnly: true, sameSite: 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(COOKIE, { httpOnly: true, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
   clearCsrfCookie(res);
 }
 

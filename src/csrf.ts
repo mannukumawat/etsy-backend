@@ -30,7 +30,7 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number) {
   const token = randomBytes(32).toString('hex');
   res.cookie(CSRF_COOKIE, token, {
     httpOnly: false, // must be readable by the app's own JS to echo back as a header
-    sameSite: 'lax',
+    sameSite: env.isProd ? 'none' : 'lax',
     secure: env.isProd,
     maxAge: maxAgeMs,
     path: '/',
@@ -38,7 +38,7 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number) {
 }
 
 export function clearCsrfCookie(res: Response) {
-  res.clearCookie(CSRF_COOKIE, { httpOnly: false, sameSite: 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(CSRF_COOKIE, { httpOnly: false, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
 }
 
 function safeEqual(a: string, b: string): boolean {

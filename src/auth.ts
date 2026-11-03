@@ -34,8 +34,7 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
   });
   res.cookie(COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
-    // Cookies marked Secure are dropped over plain http://localhost, so only set it in production.
+    sameSite: env.isProd ? 'none' : 'lax',
     secure: env.isProd,
     maxAge: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
@@ -44,7 +43,7 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
 }
 
 export function clearSession(res: Response) {
-  res.clearCookie(COOKIE, { httpOnly: true, sameSite: 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(COOKIE, { httpOnly: true, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
   clearCsrfCookie(res);
 }
 
