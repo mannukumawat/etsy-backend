@@ -2,14 +2,14 @@
 CREATE TABLE `store_settings` (
     `id` VARCHAR(191) NOT NULL DEFAULT 'singleton',
     `nameEn` VARCHAR(191) NOT NULL DEFAULT 'Your Store',
-    `taglineEn` TEXT NOT NULL DEFAULT '',
-    `taglineHi` TEXT NOT NULL DEFAULT '',
+    `taglineEn` TEXT NOT NULL,
+    `taglineHi` TEXT NOT NULL,
     `logoId` VARCHAR(191) NULL,
     `contactEmail` VARCHAR(191) NOT NULL DEFAULT '',
     `contactPhone` VARCHAR(191) NOT NULL DEFAULT '',
-    `contactAddress` TEXT NOT NULL DEFAULT '',
-    `contactHoursEn` TEXT NOT NULL DEFAULT '',
-    `contactHoursHi` TEXT NOT NULL DEFAULT '',
+    `contactAddress` TEXT NOT NULL,
+    `contactHoursEn` TEXT NOT NULL,
+    `contactHoursHi` TEXT NOT NULL,
     `socialInstagram` VARCHAR(191) NOT NULL DEFAULT '',
     `socialPinterest` VARCHAR(191) NOT NULL DEFAULT '',
     `socialFacebook` VARCHAR(191) NOT NULL DEFAULT '',
@@ -26,8 +26,8 @@ CREATE TABLE `store_settings` (
 -- CreateTable
 CREATE TABLE `shipping_settings` (
     `id` VARCHAR(191) NOT NULL DEFAULT 'singleton',
-    `unsupportedMessageEn` TEXT NOT NULL DEFAULT 'We don''t currently ship to this destination.',
-    `unsupportedMessageHi` TEXT NOT NULL DEFAULT '',
+    `unsupportedMessageEn` TEXT NOT NULL,
+    `unsupportedMessageHi` TEXT NOT NULL,
     `updatedAt` DATETIME(3) NOT NULL,
 
     PRIMARY KEY (`id`)
@@ -38,7 +38,7 @@ CREATE TABLE `shipping_zones` (
     `id` VARCHAR(191) NOT NULL,
     `settingsId` VARCHAR(191) NOT NULL DEFAULT 'singleton',
     `nameEn` VARCHAR(191) NOT NULL,
-    `countries` TEXT NOT NULL DEFAULT '[]',
+    `countries` TEXT NOT NULL,
     `standardEnabled` BOOLEAN NOT NULL DEFAULT true,
     `standardRate` INTEGER NOT NULL DEFAULT 0,
     `standardMinDays` INTEGER NOT NULL DEFAULT 3,
@@ -124,7 +124,7 @@ CREATE TABLE `inventory_adjustments` (
     `after` INTEGER NOT NULL,
     `delta` INTEGER NOT NULL,
     `reason` VARCHAR(191) NOT NULL,
-    `note` TEXT NOT NULL DEFAULT '',
+    `note` TEXT NOT NULL,
     `actor` VARCHAR(191) NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
@@ -162,7 +162,7 @@ CREATE TABLE `page_docs` (
 CREATE TABLE `coupons` (
     `id` VARCHAR(191) NOT NULL,
     `code` VARCHAR(191) NOT NULL,
-    `description` TEXT NOT NULL DEFAULT '',
+    `description` TEXT NOT NULL,
     `type` VARCHAR(191) NOT NULL,
     `value` DOUBLE NOT NULL,
     `maxDiscount` INTEGER NULL,
@@ -174,8 +174,8 @@ CREATE TABLE `coupons` (
     `perCustomerLimit` INTEGER NULL,
     `timesUsed` INTEGER NOT NULL DEFAULT 0,
     `scope` VARCHAR(191) NOT NULL DEFAULT 'all',
-    `productIds` TEXT NOT NULL DEFAULT '[]',
-    `categoryIds` TEXT NOT NULL DEFAULT '[]',
+    `productIds` TEXT NOT NULL,
+    `categoryIds` TEXT NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
 
@@ -313,7 +313,7 @@ CREATE TABLE `order_lines` (
     `nameEn` VARCHAR(191) NOT NULL,
     `nameHi` VARCHAR(191) NOT NULL DEFAULT '',
     `variantLabel` VARCHAR(191) NOT NULL DEFAULT '',
-    `imageUrl` TEXT NOT NULL DEFAULT '',
+    `imageUrl` TEXT NOT NULL,
     `unitPrice` INTEGER NOT NULL,
     `quantity` INTEGER NOT NULL,
     `lineTotal` INTEGER NOT NULL,
@@ -388,3 +388,4 @@ ALTER TABLE `order_events` ADD CONSTRAINT `order_events_orderId_fkey` FOREIGN KE
 
 -- AddForeignKey
 ALTER TABLE `order_notes` ADD CONSTRAINT `order_notes_orderId_fkey` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+

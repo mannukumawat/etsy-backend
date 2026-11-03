@@ -18,10 +18,10 @@ CREATE TABLE `collections` (
     `slug` VARCHAR(191) NOT NULL,
     `titleEn` VARCHAR(191) NOT NULL,
     `titleHi` VARCHAR(191) NOT NULL DEFAULT '',
-    `subtitleEn` TEXT NOT NULL DEFAULT '',
-    `subtitleHi` TEXT NOT NULL DEFAULT '',
-    `descriptionEn` TEXT NOT NULL DEFAULT '',
-    `descriptionHi` TEXT NOT NULL DEFAULT '',
+    `subtitleEn` TEXT NOT NULL,
+    `subtitleHi` TEXT NOT NULL,
+    `descriptionEn` TEXT NOT NULL,
+    `descriptionHi` TEXT NOT NULL,
     `heroImageId` VARCHAR(191) NULL,
     `heroColor` VARCHAR(191) NOT NULL DEFAULT '#F5ECE1',
     `status` VARCHAR(191) NOT NULL DEFAULT 'draft',
@@ -57,7 +57,7 @@ CREATE TABLE `collection_sections` (
     `titleEn` VARCHAR(191) NOT NULL,
     `titleHi` VARCHAR(191) NOT NULL DEFAULT '',
     `position` INTEGER NOT NULL DEFAULT 0,
-    `productIds` TEXT NOT NULL DEFAULT '[]',
+    `productIds` TEXT NOT NULL,
 
     INDEX `collection_sections_collectionId_position_idx`(`collectionId`, `position`),
     PRIMARY KEY (`id`)
@@ -74,3 +74,4 @@ ALTER TABLE `collection_circles` ADD CONSTRAINT `collection_circles_imageId_fkey
 
 -- AddForeignKey
 ALTER TABLE `collection_sections` ADD CONSTRAINT `collection_sections_collectionId_fkey` FOREIGN KEY (`collectionId`) REFERENCES `collections`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+

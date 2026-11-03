@@ -24,6 +24,7 @@ import { adminMediaRouter, mediaRouter } from './routes/media.js';
 import { publicRouter } from './routes/public.js';
 import { adminReviewsRouter, customerReviewsRouter, publicReviewsRouter } from './routes/reviews.js';
 import { adminReturnsRouter } from './routes/adminReturns.js';
+import { importExportRouter } from './routes/importExport.js';
 import { customerCancelRouter, customerReturnsRouter } from './routes/returns.js';
 import { translationsRouter } from './routes/translations.js';
 import { stripHindiResponses, translateResponses } from './translations.js';
@@ -98,6 +99,7 @@ export function createApp() {
   app.use('/api/admin/reviews', adminReviewsRouter);
   app.use('/api/admin/returns', adminReturnsRouter);
   app.use('/api/admin/translations', translationsRouter);
+  app.use('/api/admin', importExportRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/settings', publicSettingsRouter);
   app.use('/api/content', publicContentRouter);
