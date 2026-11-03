@@ -9,6 +9,88 @@ import { route, badRequest } from '../http.js';
 export const importExportRouter = Router();
 importExportRouter.use(requireOwner);
 
+// ---------------------------------------------------------------------------
+// GET /api/admin/products/template  — download blank Excel template
+// ---------------------------------------------------------------------------
+importExportRouter.get(
+  '/products/template',
+  route(async (_req, res) => {
+    const sampleRows = [
+      {
+        product_name: 'Natural Wool Kilim Rug - Charcoal Geometric',
+        category: 'Kilim Rug',
+        description: 'Handwoven flatweave rug with kilim styling. Materials: Hemp, jute, wool.',
+        mrp_inr: 15739,
+        sale_inr: 4407,
+        stock: 3,
+        size_label: '2x3 Ft Kilim Rug (₹ 4,407)',
+        size_price_inr: 4407,
+      },
+      {
+        product_name: 'Natural Wool Kilim Rug - Charcoal Geometric',
+        category: 'Kilim Rug',
+        description: 'Handwoven flatweave rug with kilim styling. Materials: Hemp, jute, wool.',
+        mrp_inr: 15739,
+        sale_inr: 4407,
+        stock: 3,
+        size_label: '4x6 Ft Kilim Rug (₹ 16,353)',
+        size_price_inr: 16353,
+      },
+      {
+        product_name: 'Natural Wool Kilim Rug - Charcoal Geometric',
+        category: 'Kilim Rug',
+        description: 'Handwoven flatweave rug with kilim styling. Materials: Hemp, jute, wool.',
+        mrp_inr: 15739,
+        sale_inr: 4407,
+        stock: 3,
+        size_label: '6x9 Ft Kilim Rug (₹ 26,746)',
+        size_price_inr: 26746,
+      },
+      {
+        product_name: 'Cotton Yoga Mat - Natural',
+        category: 'Cotton Yoga Mat',
+        description: 'Handwoven cotton yoga mat, non-slip surface.',
+        mrp_inr: 2500,
+        sale_inr: 1800,
+        stock: 10,
+        size_label: '',
+        size_price_inr: 1800,
+      },
+    ];
+
+    const wb = XLSX.utils.book_new();
+
+    // --- Products sheet ---
+    const ws = XLSX.utils.json_to_sheet(sampleRows);
+    ws['!cols'] = [
+      { wch: 50 }, { wch: 20 }, { wch: 45 },
+      { wch: 12 }, { wch: 12 }, { wch: 8 },
+      { wch: 35 }, { wch: 16 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Products');
+
+    // --- Instructions sheet ---
+    const instructions = [
+      { column: 'product_name', required: 'YES', description: 'Product name. Same name on multiple rows = same product with multiple sizes.' },
+      { column: 'category', required: 'YES', description: 'Category name. Auto-created if does not exist. E.g. Kilim Rug, Jute Rug, Cushion Cover' },
+      { column: 'description', required: 'no', description: 'Short product description.' },
+      { column: 'mrp_inr', required: 'YES', description: 'Maximum Retail Price in INR (without rupee symbol). E.g. 15739' },
+      { column: 'sale_inr', required: 'no', description: 'Sale/current price in INR. Leave blank if same as MRP.' },
+      { column: 'stock', required: 'no', description: 'Stock quantity for this size. Default 10 if blank.' },
+      { column: 'size_label', required: 'no', description: 'Size option label. E.g. "2x3 Ft Kilim Rug (₹ 4,407)". Leave blank if no sizes.' },
+      { column: 'size_price_inr', required: 'no', description: 'Price for this size in INR. Used if no ₹ found in size_label.' },
+    ];
+    const wsi = XLSX.utils.json_to_sheet(instructions);
+    wsi['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 70 }];
+    XLSX.utils.book_append_sheet(wb, wsi, 'Instructions');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', 'attachment; filename="product-import-template.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  }),
+);
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function makeId() { return crypto.randomBytes(12).toString('hex'); }
