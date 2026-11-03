@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+
+# SQLite development database
+prisma/*.db
+prisma/*.db-journal

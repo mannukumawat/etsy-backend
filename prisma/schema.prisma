@@ -1,0 +1,855 @@
+// Catalog schema for milestone 1: owner auth, categories, products (with options, variants, images,
+// specs) and media. Checkout, orders, coupons and settings stay in the apps' mock services for now.
+//
+// Money is stored as integer minor units in the USD base currency, matching both apps.
+// Localized text is stored as paired `...En` / `...Hi` columns so it can be queried and indexed.
+//
+// PORTABILITY: this runs on MySQL/MariaDB (e.g. XAMPP), and the same schema also runs on PostgreSQL
+// or SQLite by switching the provider below. List-ish fields (tags, imageIds, variant options) are
+// stored as JSON text rather than native arrays, and search uses a pre-lowercased `searchText` column
+// instead of ILIKE/FULLTEXT, precisely so every engine behaves identically.
+//
+// MySQL note: Prisma's default native type for `String` is VARCHAR(191) — enough for ids, slugs, SKUs
+// and short labels, but too short for descriptions and JSON blobs, which are marked `@db.Text` below.
+// The database itself must use utf8mb4 (not latin1/utf8mb3) or Hindi text will not store correctly;
+// `npm run db:create` creates it that way.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// The single store owner. This is a single-seller store: there is no vendor or multi-tenant concept.
+model Owner {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("owners")
+}
+
+/// Uploaded or seeded image. Bytes live in the database so both apps resolve the same durable
+/// URL (`/media/:id`) across restarts, with no dependency on a CDN or local blob: URLs.
+model Media {
+  id        String   @id
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  width     Int?
+  height    Int?
+  altEn     String   @default("") @db.Text
+  altHi     String   @default("") @db.Text
+  /// Raw file bytes (SVG/PNG/JPEG/WebP).
+  data      Bytes
+  source    String   @default("seed") // 'seed' | 'upload'
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categoryImages      Category[]         @relation("CategoryImage")
+  categoryBanners     Category[]         @relation("CategoryBanner")
+  productImages       ProductImage[]
+  storeLogoFor        StoreSettings[]
+  collectionHeroFor   Collection[]
+  collectionCircleFor CollectionCircle[]
+
+  @@map("media")
+}
+
+model Category {
+  id            String   @id
+  slug          String   @unique
+  nameEn        String
+  nameHi        String   @default("")
+  descriptionEn String   @default("") @db.Text
+  descriptionHi String   @default("") @db.Text
+  imageId       String?
+  bannerId      String?
+  displayOrder  Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  image    Media?    @relation("CategoryImage", fields: [imageId], references: [id], onDelete: SetNull)
+  banner   Media?    @relation("CategoryBanner", fields: [bannerId], references: [id], onDelete: SetNull)
+  products Product[]
+
+  @@index([isActive, displayOrder])
+  @@map("categories")
+}
+
+model Product {
+  id                 String   @id
+  slug               String   @unique
+  /// 'draft' | 'active' | 'archived' (see ProductStatus in src/types.ts)
+  status             String   @default("draft")
+  nameEn             String
+  nameHi             String   @default("")
+  /// Lowercase copy of nameEn, so search works case-insensitively on every engine.
+  nameSearch         String   @default("")
+  shortDescriptionEn String   @default("") @db.Text
+  shortDescriptionHi String   @default("") @db.Text
+  descriptionEn      String   @default("") @db.Text
+  descriptionHi      String   @default("") @db.Text
+  categoryId         String
+  /// JSON array of strings.
+  tags               String   @default("[]") @db.Text
+  /// Lowercase, space-separated haystack of name + tags + SKUs for search.
+  searchText         String   @default("") @db.Text
+  /// USD minor units.
+  basePrice          Int
+  baseSalePrice      Int?
+  materialsEn        String   @default("") @db.Text
+  materialsHi        String   @default("") @db.Text
+  careEn             String   @default("") @db.Text
+  careHi             String   @default("") @db.Text
+  weightValue        Float?
+  weightUnit         String   @default("g")
+  dimLength          Float?
+  dimWidth           Float?
+  dimHeight          Float?
+  dimUnit            String   @default("cm")
+  isFeatured         Boolean  @default(false)
+  isBestseller       Boolean  @default(false)
+  isNew              Boolean  @default(false)
+  displayOrder       Int      @default(100)
+  seoTitleEn         String   @default("")
+  seoTitleHi         String   @default("")
+  seoDescriptionEn   String   @default("") @db.Text
+  seoDescriptionHi   String   @default("") @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  category     Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  images       ProductImage[]
+  options      ProductOption[]
+  variants     ProductVariant[]
+  specs        ProductSpec[]
+  wishlistedBy WishlistItem[]
+  reviews      Review[]
+
+  @@index([status, displayOrder])
+  @@index([categoryId])
+  @@map("products")
+}
+
+/// Ordered product gallery. `position` 0 is the primary image.
+model ProductImage {
+  id        String @id @default(cuid())
+  productId String
+  mediaId   String
+  position  Int
+  altEn     String @default("")
+  altHi     String @default("")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  media   Media   @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, mediaId])
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+model ProductOption {
+  id        String @id
+  productId String
+  nameEn    String
+  nameHi    String @default("")
+  /// 'swatch' | 'button'
+  type      String @default("button")
+  position  Int
+
+  product Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  values  ProductOptionValue[]
+
+  @@index([productId, position])
+  @@map("product_options")
+}
+
+model ProductOptionValue {
+  id       String  @id
+  optionId String
+  labelEn  String
+  labelHi  String  @default("")
+  swatch   String?
+  position Int
+
+  option ProductOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@index([optionId, position])
+  @@map("product_option_values")
+}
+
+model ProductVariant {
+  id        String @id
+  productId String
+  sku       String @unique
+  /// JSON object: optionId -> valueId. "{}" for products without options.
+  options   String @default("{}") @db.Text
+  /// USD minor units.
+  price     Int
+  salePrice Int?
+  stock     Int    @default(0)
+  /// JSON array of media ids shown when this variant is selected.
+  imageIds  String @default("[]") @db.Text
+  position  Int    @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, position])
+  @@map("product_variants")
+}
+
+model ProductSpec {
+  id        String @id
+  productId String
+  labelEn   String
+  labelHi   String @default("")
+  valueEn   String
+  valueHi   String @default("")
+  position  Int
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, position])
+  @@map("product_specs")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 2: settings, inventory history, homepage/page content, coupons, customers, orders.
+// Singleton config tables use a fixed id of "singleton", enforced at the application layer (never
+// created twice), the same way every other single-seller invariant in this schema is enforced.
+// ---------------------------------------------------------------------------------------------
+
+model StoreSettings {
+  id                String   @id @default("singleton")
+  nameEn            String   @default("Your Store")
+  taglineEn         String   @default("") @db.Text
+  taglineHi         String   @default("") @db.Text
+  logoId            String?
+  contactEmail      String   @default("")
+  contactPhone      String   @default("")
+  contactAddress    String   @default("") @db.Text
+  contactHoursEn    String   @default("") @db.Text
+  contactHoursHi    String   @default("") @db.Text
+  socialInstagram   String   @default("")
+  socialPinterest   String   @default("")
+  socialFacebook    String   @default("")
+  socialYoutube     String   @default("")
+  handlingMinDays   Int      @default(1)
+  handlingMaxDays   Int      @default(3)
+  maxQtyPerLine     Int      @default(10)
+  lowStockThreshold Int      @default(5)
+  updatedAt         DateTime @updatedAt
+
+  logo Media? @relation(fields: [logoId], references: [id], onDelete: SetNull)
+
+  @@map("store_settings")
+}
+
+model ShippingSettings {
+  id                   String   @id @default("singleton")
+  unsupportedMessageEn String   @default("We don't currently ship to this destination.") @db.Text
+  unsupportedMessageHi String   @default("") @db.Text
+  updatedAt            DateTime @updatedAt
+
+  zones ShippingZone[]
+
+  @@map("shipping_settings")
+}
+
+model ShippingZone {
+  id              String  @id @default(cuid())
+  settingsId      String  @default("singleton")
+  nameEn          String
+  /// JSON array of ISO-3166 alpha-2 country codes.
+  countries       String  @default("[]") @db.Text
+  standardEnabled Boolean @default(true)
+  standardRate    Int     @default(0)
+  standardMinDays Int     @default(3)
+  standardMaxDays Int     @default(6)
+  expressEnabled  Boolean @default(false)
+  expressRate     Int     @default(0)
+  expressMinDays  Int     @default(1)
+  expressMaxDays  Int     @default(3)
+  position        Int     @default(0)
+
+  settings ShippingSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@index([settingsId, position])
+  @@map("shipping_zones")
+}
+
+model TaxSettings {
+  id               String   @id @default("singleton")
+  pricesIncludeTax Boolean  @default(false)
+  defaultRate      Float    @default(0)
+  updatedAt        DateTime @updatedAt
+
+  rules TaxRule[]
+
+  @@map("tax_settings")
+}
+
+model TaxRule {
+  id         String @id @default(cuid())
+  settingsId String @default("singleton")
+  country    String
+  region     String @default("")
+  rate       Float
+  label      String
+
+  settings TaxSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@unique([settingsId, country, region])
+  @@map("tax_rules")
+}
+
+model CurrencySettings {
+  id             String   @id @default("singleton")
+  base           String   @default("USD")
+  ratesUpdatedAt DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  currencies CurrencyConfig[]
+
+  @@map("currency_settings")
+}
+
+model CurrencyConfig {
+  id                String  @id @default(cuid())
+  settingsId        String  @default("singleton")
+  code              String
+  name              String
+  enabled           Boolean @default(true)
+  rate              Float
+  fractionDigits    Int     @default(2)
+  roundingIncrement Int     @default(1)
+
+  settings CurrencySettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@unique([settingsId, code])
+  @@map("currency_configs")
+}
+
+model LanguageSettings {
+  id              String   @id @default("singleton")
+  defaultLanguage String   @default("en")
+  hindiEnabled    Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  @@map("language_settings")
+}
+
+/// Stock adjustment log. Fields are a denormalized snapshot at the time of the adjustment (not FKed
+/// to the product/variant), so history survives a later product edit, archive, or variant rebuild —
+/// the same product-edit path rewrites variant rows (delete + recreate) on every save, which would
+/// otherwise cascade-delete this history on an unrelated field edit.
+model InventoryAdjustment {
+  id            String   @id @default(cuid())
+  productId     String
+  variantId     String
+  sku           String
+  productNameEn String
+  productNameHi String   @default("")
+  variantLabel  String   @default("")
+  before        Int
+  after         Int
+  delta         Int
+  /// 'restock' | 'correction' | 'damaged' | 'returned' | 'order_cancelled' | 'other'
+  reason        String
+  note          String   @default("") @db.Text
+  actor         String
+  createdAt     DateTime @default(now())
+
+  @@index([variantId, createdAt])
+  @@index([productId])
+  @@map("inventory_adjustments")
+}
+
+model HomepageContent {
+  id            String    @id @default("singleton")
+  /// Full HomepageContent JSON (see admin/frontend types) — nested and never queried relationally.
+  draftJson     String    @db.Text
+  publishedJson String?   @db.Text
+  publishedAt   DateTime?
+  updatedAt     DateTime  @updatedAt
+  updatedBy     String    @default("")
+
+  @@map("homepage_content")
+}
+
+model PageDoc {
+  /// 'about' | 'contact' | 'faq' | 'shipping' | 'returns' | 'privacy' | 'terms' — the 7 fixed keys.
+  key           String    @id
+  isLegal       Boolean   @default(false)
+  draftJson     String    @db.Text
+  publishedJson String?   @db.Text
+  publishedAt   DateTime?
+  updatedAt     DateTime  @updatedAt
+  updatedBy     String    @default("")
+
+  @@map("page_docs")
+}
+
+model Coupon {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  description      String    @default("") @db.Text
+  /// 'percentage' | 'fixed'
+  type             String
+  /// Percentage points (0-100) or fixed USD minor units, depending on `type`.
+  value            Float
+  maxDiscount      Int?
+  minOrder         Int?
+  startsAt         DateTime?
+  endsAt           DateTime?
+  isActive         Boolean   @default(true)
+  usageLimit       Int?
+  perCustomerLimit Int?
+  timesUsed        Int       @default(0)
+  /// 'all' | 'products' | 'categories'
+  scope            String    @default("all")
+  productIds       String    @default("[]") @db.Text
+  categoryIds      String    @default("[]") @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  redemptions CouponRedemption[]
+
+  @@map("coupons")
+}
+
+/// One row per successful redemption, so `perCustomerLimit` can be enforced under concurrent
+/// checkouts via a conditional insert inside the same transaction that increments `timesUsed`.
+model CouponRedemption {
+  id          String   @id @default(cuid())
+  couponId    String
+  /// "acct:<customerId>" for signed-in customers, "guest:<lowercased email>" otherwise.
+  customerKey String
+  orderId     String
+  createdAt   DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([couponId, customerKey])
+  @@map("coupon_redemptions")
+}
+
+model Customer {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  phone        String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  addresses     CustomerAddress[]
+  wishlistItems WishlistItem[]
+  resetTokens   PasswordResetToken[]
+  orders        Order[]
+  reviews       Review[]
+
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id           String   @id @default(cuid())
+  customerId   String
+  label        String   @default("Address")
+  isDefault    Boolean  @default(false)
+  fullName     String
+  phoneCountry String   @default("")
+  phone        String
+  country      String
+  line1        String
+  line2        String   @default("")
+  city         String   @default("")
+  region       String   @default("")
+  postalCode   String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+model WishlistItem {
+  id         String   @id @default(cuid())
+  customerId String
+  productId  String
+  variantId  String?
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, productId, variantId])
+  @@index([customerId])
+  @@map("wishlist_items")
+}
+
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  customerId String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("password_reset_tokens")
+}
+
+/// A placed order. Line items, address and the currency-rate snapshot are copied in at checkout
+/// time (not FKed to the live catalog) so an order's historical detail never changes under it.
+model Order {
+  id                  String    @id @default(cuid())
+  number              String    @unique
+  /// Client-supplied idempotency key; a retry with the same key returns the original order.
+  idempotencyKey      String?   @unique
+  customerId          String?
+  /// 'account' | 'guest'
+  customerKind        String
+  customerName        String
+  customerEmail       String
+  customerPhone       String    @default("")
+  /// Guest orders only: sha256 of a one-time-issued random access token (never the raw token), the
+  /// guest's only way back into GET /api/orders/:id after checkout. Null for account orders, which are
+  /// authorized by the signed-in customer's session instead.
+  guestTokenHash      String?   @unique
+  guestTokenExpiresAt DateTime?
+  /// JSON Address object.
+  shippingAddressJson String    @db.Text
+  currency            String
+  /// JSON RateSnapshot { base, currency, rate, capturedAt }.
+  rateSnapshotJson    String    @db.Text
+  subtotal            Int
+  discount            Int       @default(0)
+  couponCode          String?
+  shipping            Int       @default(0)
+  tax                 Int       @default(0)
+  taxRate             Float     @default(0)
+  taxInclusive        Boolean   @default(false)
+  total               Int
+  refundedTotal       Int       @default(0)
+  shippingMethodId    String
+  shippingMethodLabel String
+  shippingMinDays     Int
+  shippingMaxDays     Int
+  /// 'cod' | 'card' | 'upi' | 'wallet'
+  paymentMethod       String
+  /// 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded'
+  paymentStatus       String    @default("unpaid")
+  paymentReference    String    @default("")
+  /// 'unfulfilled' | 'processing' | 'shipped' | 'delivered' | 'cancelled'
+  fulfilmentStatus    String    @default("unfulfilled")
+  carrier             String?
+  trackingNumber      String?
+  trackingUrl         String?
+  restocked           Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  customer    Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lines       OrderLine[]
+  events      OrderEvent[]
+  notes       OrderNote[]
+  redemptions CouponRedemption[]
+  reviews     Review[]
+
+  @@index([customerId])
+  @@index([customerEmail])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderLine {
+  id             String @id @default(cuid())
+  orderId        String
+  productId      String
+  variantId      String
+  /// Product slug at the time of order, for the storefront's "view product" link.
+  slug           String @default("")
+  sku            String
+  nameEn         String
+  nameHi         String @default("")
+  variantLabelEn String @default("")
+  variantLabelHi String @default("")
+  imageUrl       String @default("") @db.Text
+  unitPrice      Int
+  quantity       Int
+  lineTotal      Int
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_lines")
+}
+
+model OrderEvent {
+  id      String   @id @default(cuid())
+  orderId String
+  /// 'created' | 'payment' | 'fulfilment' | 'tracking' | 'refund' | 'cancelled' | 'restock' | 'note'
+  type    String
+  message String   @db.Text
+  /// 'system' | 'customer' | 'admin'
+  actor   String
+  at      DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, at])
+  @@map("order_events")
+}
+
+model OrderNote {
+  id      String   @id @default(cuid())
+  orderId String
+  author  String
+  body    String   @db.Text
+  at      DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_notes")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Site navigation + curated collections (distinct from Category: a Collection is an admin-curated
+// landing page — hero, circular links, several named product sections — a product/category can
+// appear in many collections, unlike the catalog's single-category-per-product model).
+// ---------------------------------------------------------------------------------------------
+
+model NavLink {
+  id        String   @id @default(cuid())
+  labelEn   String
+  labelHi   String   @default("")
+  /// A site path ("/collection/wedding-guide", "/category/ceramics") or a full https:// URL.
+  href      String
+  position  Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("nav_links")
+}
+
+model Collection {
+  id            String    @id @default(cuid())
+  slug          String    @unique
+  titleEn       String
+  titleHi       String    @default("")
+  subtitleEn    String    @default("") @db.Text
+  subtitleHi    String    @default("") @db.Text
+  descriptionEn String    @default("") @db.Text
+  descriptionHi String    @default("") @db.Text
+  heroImageId   String?
+  /// Hex background behind the hero when no image is set (or alongside it).
+  heroColor     String    @default("#F5ECE1")
+  /// 'draft' | 'published'
+  status        String    @default("draft")
+  displayOrder  Int       @default(0)
+  publishedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  heroImage Media?              @relation(fields: [heroImageId], references: [id], onDelete: SetNull)
+  circles   CollectionCircle[]
+  sections  CollectionSection[]
+
+  @@index([status, displayOrder])
+  @@map("collections")
+}
+
+/// Circular image links shown under a collection's hero (to a category, another collection, or an
+/// arbitrary URL).
+model CollectionCircle {
+  id           String  @id @default(cuid())
+  collectionId String
+  labelEn      String
+  labelHi      String  @default("")
+  imageId      String?
+  /// 'category' | 'collection' | 'url'
+  linkType     String
+  /// A category slug, a collection slug, or a full URL/path, depending on linkType.
+  linkValue    String
+  position     Int     @default(0)
+
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  image      Media?     @relation(fields: [imageId], references: [id], onDelete: SetNull)
+
+  @@index([collectionId, position])
+  @@map("collection_circles")
+}
+
+/// One named, ordered product shelf within a collection page (e.g. "Winter Wedding").
+model CollectionSection {
+  id           String @id @default(cuid())
+  collectionId String
+  titleEn      String
+  titleHi      String @default("")
+  position     Int    @default(0)
+  /// JSON array of product ids, in display order.
+  productIds   String @default("[]") @db.Text
+
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@index([collectionId, position])
+  @@map("collection_sections")
+}
+
+/// A customer's verified-purchase review of a product. One review per (customer, product), enforced
+/// by the unique constraint below (not just application logic). Eligibility (a delivered order
+/// containing this product) is verified server-side at creation and the qualifying order is recorded;
+/// the order itself is never exposed in public review responses.
+model Review {
+  id         String    @id @default(cuid())
+  productId  String
+  customerId String
+  orderId    String
+  rating     Int
+  title      String?   @db.VarChar(120)
+  body       String?   @db.Text
+  /// 'published' | 'hidden' — set by owner moderation. New reviews publish immediately; hiding/
+  /// restoring never rewrites the customer's original rating/title/body.
+  status     String    @default("published")
+  /// Set only when the customer edits their own review — moderation never touches it.
+  editedAt   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  product          Product                 @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customer         Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order            Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  moderationEvents ReviewModerationEvent[]
+
+  @@unique([customerId, productId])
+  @@index([productId, status])
+  @@index([status])
+  @@map("reviews")
+}
+
+/// Append-only moderation log — every hide/restore action, with the owner's reason, so a review's full
+/// moderation history survives even across repeated hide/restore cycles.
+model ReviewModerationEvent {
+  id        String   @id @default(cuid())
+  reviewId  String
+  /// 'hidden' | 'restored'
+  action    String
+  reason    String?  @db.Text
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@map("review_moderation_events")
+}
+
+/// Translation memory for store content. Keyed by the exact English source text (via its sha256), so
+/// a translation applies wherever that English string appears (product, page, banner, nav…). If the
+/// owner edits the English text, the new text has no entry yet and the storefront shows English
+/// instead of a stale translation.
+model ContentTranslation {
+  id         String   @id @default(cuid())
+  /// 'de' | 'fr' | 'it' | 'es'
+  lang       String   @db.VarChar(8)
+  sourceHash String   @db.Char(64)
+  source     String   @db.Text
+  text       String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([lang, sourceHash])
+  @@map("content_translations")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Returns & Refunds — tables created via migrate-returns.ts (raw SQL).
+// These model blocks are for IDE documentation only. Do NOT run prisma generate/db push
+// while the server holds the query_engine DLL. All access uses prisma.$queryRaw / $executeRaw.
+// ---------------------------------------------------------------------------------------------
+// Additional columns on order_lines (added by migration):
+//   cancelled_qty INT DEFAULT 0
+//   returned_qty  INT DEFAULT 0
+//   delivered_at  DATETIME NULL
+//   return_window_days INT NULL
+//   return_shipping_fee INT DEFAULT 0
+//
+// model ReturnRequest {
+//   id              String    -- cuid hex
+//   reference       String    -- unique, e.g. RET-ABCD1234
+//   orderId         String
+//   orderLineId     String
+//   variantId       String
+//   requestedQty    Int
+//   approvedQty     Int?
+//   receivedQty     Int?
+//   acceptedQty     Int?
+//   restockQty      Int?
+//   reason          String    -- damaged|wrong_item|not_as_described|changed_mind|quality_issue|other
+//   customerNote    String?
+//   adminNote       String?
+//   rejectionReason String?
+//   photos          Text?     -- JSON string[]
+//   status          String    -- requested|approved|rejected|shipping_arranged|in_transit|received|inspected|refunded|withdrawn|closed
+//   shippingMethod  String?   -- self_ship|pickup
+//   customerCarrier String?
+//   customerTracking String?
+//   pickupAddress   String?
+//   returnCarrier   String?
+//   returnTracking  String?
+//   refundableAmount Int
+//   shippingFee     Int DEFAULT 0
+//   refundAmount    Int?
+//   returnWindowDays Int DEFAULT 7
+//   requestedAt     DateTime
+//   decidedAt       DateTime?
+//   receivedAt      DateTime?
+//   inspectedAt     DateTime?
+//   refundedAt      DateTime?
+//   @@map("return_requests")
+// }
+//
+// model ReturnEvent {
+//   id         String
+//   returnId   String
+//   type       String    -- requested|approved|rejected|pickup_arranged|in_transit|received|inspected|refunded|withdrawn|note
+//   actor      String    -- customer|admin|system
+//   actorId    String?
+//   message    String?
+//   data       String?
+//   createdAt  DateTime
+//   @@map("return_events")
+// }
+//
+// model Refund {
+//   id          String
+//   orderId     String
+//   returnId    String?   -- null for direct admin refunds
+//   amount      Int
+//   reason      String
+//   method      String    -- original|manual_bank|manual_upi|store_credit
+//   status      String    -- pending|processing|completed|failed
+//   reference   String?
+//   completedAt DateTime?
+//   failedAt    DateTime?
+//   recordedBy  String?   -- admin email
+//   note        String?
+//   createdAt   DateTime
+//   updatedAt   DateTime
+//   @@map("refunds")
+// }
