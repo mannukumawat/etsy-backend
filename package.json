@@ -20,7 +20,9 @@
     "setup": "node scripts/check-env.mjs && prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
     "db:password": "node scripts/set-db-password.mjs",
     "check:env": "node scripts/check-env.mjs",
-    "db:create": "node scripts/create-db.mjs"
+    "db:create": "node scripts/create-db.mjs",
+    "catalog:import": "tsx scripts/import-catalog.ts",
+    "catalog:fix-categories": "tsx scripts/fix-categories.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
