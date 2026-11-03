@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/check-env.mjs && tsx watch src/server.ts",
+    "postinstall": "prisma generate",
     "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
