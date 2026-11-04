@@ -35,6 +35,7 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number) {
     maxAge: maxAgeMs,
     path: '/',
   });
+  return token;
 }
 
 export function clearCsrfCookie(res: Response) {

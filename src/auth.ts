@@ -39,7 +39,7 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
     maxAge: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
   });
-  issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
+  return issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
 }
 
 export function clearSession(res: Response) {

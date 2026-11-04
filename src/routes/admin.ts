@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { clearSession, issueSession, requireOwner, verifyOwnerCredentials } from '../auth.js';
+import { CSRF_COOKIE, issueCsrfCookie } from '../csrf.js';
+import { env } from '../env.js';
 import { prisma } from '../db.js';
 import { badRequest, conflict, notFound, route, unauthorized } from '../http.js';
 import { buildSearchText, stringifyJson } from '../json.js';
@@ -22,8 +24,8 @@ adminRouter.post(
     const { email, password } = loginSchema.parse(req.body);
     const owner = await verifyOwnerCredentials(email, password);
     if (!owner) throw unauthorized('Email or password is incorrect.');
-    issueSession(res, owner);
-    res.json({ owner: { id: owner.id, email: owner.email, name: owner.name, role: 'owner' } });
+    const csrfToken = issueSession(res, owner);
+    res.json({ owner: { id: owner.id, email: owner.email, name: owner.name, role: 'owner' }, csrfToken });
   }),
 );
 
@@ -33,7 +35,9 @@ adminRouter.post('/auth/logout', (_req, res) => {
 });
 
 adminRouter.get('/auth/me', requireOwner, (req, res) => {
-  res.json({ owner: { id: req.owner!.sub, email: req.owner!.email, name: req.owner!.name, role: 'owner' } });
+  const existingToken = (req.cookies as Record<string, string> | undefined)?.[CSRF_COOKIE];
+  const csrfToken = existingToken || issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
+  res.json({ owner: { id: req.owner!.sub, email: req.owner!.email, name: req.owner!.name, role: 'owner' }, csrfToken });
 });
 
 // Everything past this point requires a valid owner session.
