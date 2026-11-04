@@ -87,6 +87,10 @@ export function createApp() {
   );
 
   app.use('/media', mediaRouter);
+  // Auth routes must run before the generic owner-only /api/admin routers below. In particular,
+  // importExportRouter installs requireOwner at router level and would otherwise reject /auth/login
+  // before adminRouter gets a chance to handle it.
+  app.use('/api/admin', adminRouter);
   app.use('/api/admin/media', adminMediaRouter);
   app.use('/api/admin/settings', settingsRouter);
   app.use('/api/admin/inventory', inventoryRouter);
@@ -102,7 +106,6 @@ export function createApp() {
   app.use('/api/admin/translations', translationsRouter);
   app.use('/api/admin/i18n', uiI18nAdminRouter);
   app.use('/api/admin', importExportRouter);
-  app.use('/api/admin', adminRouter);
   app.use('/api/settings', publicSettingsRouter);
   app.use('/api/content', publicContentRouter);
   app.use('/api/customer/auth', customerAuthRouter);
