@@ -18,6 +18,7 @@ import { checkoutRouter, orderTrackRouter } from './routes/checkout.js';
 import { collectionsRouter, publicCollectionsRouter } from './routes/collections.js';
 import { couponsRouter } from './routes/coupons.js';
 import { navLinksRouter, publicNavLinksRouter } from './routes/nav.js';
+import { itemGroupsRouter, publicItemGroupsRouter } from './routes/itemGroups.js';
 import { customerAuthRouter, customerRouter } from './routes/customers.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { adminMediaRouter, mediaRouter } from './routes/media.js';
@@ -100,6 +101,7 @@ export function createApp() {
   app.use('/api/admin/customers', adminCustomersRouter);
   app.use('/api/admin/dashboard', adminDashboardRouter);
   app.use('/api/admin/nav-links', navLinksRouter);
+  app.use('/api/admin/item-groups', itemGroupsRouter);
   app.use('/api/admin/collections', collectionsRouter);
   app.use('/api/admin/reviews', adminReviewsRouter);
   app.use('/api/admin/returns', adminReturnsRouter);
@@ -117,6 +119,7 @@ export function createApp() {
   app.use('/api/orders', orderTrackRouter);
   app.use('/api/i18n', uiI18nPublicRouter);
   app.use('/api/nav-links', publicNavLinksRouter);
+  app.use('/api/item-groups', publicItemGroupsRouter);
   app.use('/api/collections', publicCollectionsRouter);
   app.use('/api', publicReviewsRouter);
   app.use('/api', publicRouter);

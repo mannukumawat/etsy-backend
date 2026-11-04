@@ -99,6 +99,8 @@ model Product {
   descriptionEn      String   @default("") @db.Text
   descriptionHi      String   @default("") @db.Text
   categoryId         String
+  itemGroupId        String?
+  navLinkId          String?
   /// JSON array of strings.
   tags               String   @default("[]") @db.Text
   /// Lowercase, space-separated haystack of name + tags + SKUs for search.
@@ -131,6 +133,8 @@ model Product {
   updatedAt          DateTime @updatedAt
 
   category     Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  itemGroup    ItemGroup?       @relation(fields: [itemGroupId], references: [id], onDelete: SetNull)
+  navLink      NavLink?         @relation(fields: [navLinkId], references: [id], onDelete: SetNull)
   images       ProductImage[]
   options      ProductOption[]
   variants     ProductVariant[]
@@ -140,6 +144,8 @@ model Product {
 
   @@index([status, displayOrder])
   @@index([categoryId])
+  @@index([itemGroupId])
+  @@index([navLinkId])
   @@map("products")
 }
 
@@ -649,7 +655,26 @@ model NavLink {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  products  Product[]
+
   @@map("nav_links")
+}
+
+model ItemGroup {
+  id        String    @id @default(cuid())
+  nameEn    String
+  nameHi    String    @default("")
+  slug      String    @unique
+  position  Int       @default(100)
+  isActive  Boolean   @default(true)
+  imageId   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products  Product[]
+
+  @@index([isActive, position])
+  @@map("item_groups")
 }
 
 model Collection {

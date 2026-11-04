@@ -22,6 +22,7 @@
     "check:env": "node scripts/check-env.mjs",
     "db:create": "node scripts/create-db.mjs",
     "catalog:import": "tsx scripts/import-catalog.ts",
+    "catalog:images": "tsx scripts/import-dignity-images.ts",
     "catalog:fix-categories": "tsx scripts/fix-categories.ts"
   },
   "prisma": {

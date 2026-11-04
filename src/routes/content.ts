@@ -18,7 +18,7 @@ async function assertHomepageReferencesExist(c: HomepageContentInput, publishing
   if (c.hero.imageId) await assertMedia(c.hero.imageId, 'hero.imageId');
   if (c.story.imageId) await assertMedia(c.story.imageId, 'story.imageId');
 
-  const productIds = [...new Set([...c.featuredProductIds, ...c.bestsellerProductIds, ...c.newArrivalProductIds])];
+  const productIds = [...new Set([...c.featuredProductIds, ...c.bestsellerProductIds, ...c.newArrivalProductIds, ...c.itemsProductIds, ...c.transferProductIds])];
   if (productIds.length) {
     const found = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, nameEn: true, status: true } });
     for (const id of productIds) {
@@ -177,6 +177,8 @@ const EMPTY_HOMEPAGE: HomepageContentInput = homepageContentSchema.parse({
   featuredProductIds: [],
   bestsellerProductIds: [],
   newArrivalProductIds: [],
+  itemsProductIds: [],
+  transferProductIds: [],
   story: { title: { en: 'Our story' }, body: { en: '' }, imageId: null, ctaLabel: { en: '' }, ctaHref: '' },
   newsletter: { title: { en: 'Newsletter' }, body: { en: '' } },
 });

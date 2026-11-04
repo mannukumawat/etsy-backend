@@ -25,6 +25,8 @@ export const productInputSchema = z
     shortDescription: localized(300),
     description: localized(5000),
     categoryId: z.string().min(1, 'Choose a category.'),
+    itemGroupId: z.string().nullable().optional(),
+    navLinkId: z.string().nullable().optional(),
     tags: z.array(z.string().trim().min(1).max(30)).max(20).default([]),
     basePrice: money,
     baseSalePrice: optionalMoney,
@@ -352,6 +354,8 @@ export const homepageContentSchema = z
     featuredProductIds: idList(12),
     bestsellerProductIds: idList(12),
     newArrivalProductIds: idList(12),
+    itemsProductIds: idList(12),
+    transferProductIds: idList(12),
     story: z.object({
       title: localized(120, true),
       body: localized(2000),

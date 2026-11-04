@@ -110,10 +110,12 @@ adminRouter.get(
   route(async (req, res) => {
     const q = String(req.query.q ?? '').trim();
     const status = String(req.query.status ?? '').trim();
+    const itemGroup = String(req.query.itemGroup ?? '').trim();
     const rows = await prisma.product.findMany({
       where: {
         ...(status === 'draft' || status === 'active' || status === 'archived' ? { status } : {}),
         ...(q ? { searchText: { contains: q.toLowerCase() } } : {}),
+        ...(itemGroup ? { itemGroup: { slug: itemGroup } } : {}),
       },
       include: PRODUCT_INCLUDE,
       orderBy: { updatedAt: 'desc' },
@@ -252,6 +254,8 @@ async function createOrReplaceProduct(existingId: string | null, input: ProductI
     descriptionEn: input.description.en,
     descriptionHi: input.description.hi,
     categoryId: input.categoryId,
+    itemGroupId: input.itemGroupId ?? null,
+    navLinkId: input.navLinkId ?? null,
     tags: stringifyJson(input.tags),
     nameSearch: input.name.en.toLowerCase(),
     // Pre-computed lowercase haystack keeps search case-insensitive on any engine.

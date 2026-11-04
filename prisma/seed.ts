@@ -523,6 +523,8 @@ async function seedContent() {
     featuredProductIds: HOMEPAGE_FEATURED,
     bestsellerProductIds: HOMEPAGE_BESTSELLERS,
     newArrivalProductIds: HOMEPAGE_NEW_ARRIVALS,
+    itemsProductIds: [],
+    transferProductIds: [],
     story: {
       title: L('Made slowly, by hand, in one small studio', ''),
       body: L(
