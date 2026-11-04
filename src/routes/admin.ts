@@ -363,7 +363,7 @@ async function createOrReplaceProduct(existingId: string | null, input: ProductI
         })),
       });
     }
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 
   return id;
 }
