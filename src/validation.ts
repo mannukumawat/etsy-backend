@@ -174,6 +174,11 @@ export const mediaUploadSchema = z.object({
   alt: localized(200),
 });
 
+export const mediaUrlImportSchema = z.object({
+  url: z.string().trim().url('Enter a valid image URL.').refine((value) => /^https?:\/\//i.test(value), 'Use an http:// or https:// image URL.'),
+  alt: localized(200),
+});
+
 // ---------------------------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------------------------
