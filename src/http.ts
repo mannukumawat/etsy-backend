@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 
 /** Error with an HTTP status and a stable machine-readable code the apps can branch on. */
@@ -44,7 +45,7 @@ function prismaIssue(e: { code?: string; meta?: unknown }): HttpError | null {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof HttpError) {
     return res.status(err.status).json({ error: { code: err.code, message: err.message, issues: err.issues ?? [] } });
   }
@@ -62,6 +63,18 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
   if (mapped) {
     return res.status(mapped.status).json({ error: { code: mapped.code, message: mapped.message, issues: mapped.issues ?? [] } });
   }
-  console.error('Unhandled error:', err);
-  return res.status(500).json({ error: { code: 'server_error', message: 'Something went wrong on the server.', issues: [] } });
+  const reference = randomUUID().slice(0, 8);
+  const prismaCode = typeof err === 'object' && err !== null && 'code' in err && typeof (err as { code?: unknown }).code === 'string'
+    ? (err as { code: string }).code
+    : null;
+  console.error(`[${reference}] Unhandled ${req.method} ${req.path}:`, err);
+  return res.status(500).json({
+    error: {
+      code: 'server_error',
+      message: prismaCode
+        ? `The database could not save this product (${prismaCode}). Reference: ${reference}.`
+        : `Something went wrong on the server. Reference: ${reference}.`,
+      issues: [],
+    },
+  });
 }
