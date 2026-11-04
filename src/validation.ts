@@ -68,7 +68,7 @@ export const productInputSchema = z
         }),
       )
       .min(1, 'At least one variant is required.')
-      .max(60),
+      .max(250, 'A product can have at most 250 variants. Reduce the number of option values.'),
     weight: z.object({ value: measure, unit: z.enum(['g', 'kg']).default('g') }).default({ value: null, unit: 'g' }),
     dimensions: z
       .object({ length: measure, width: measure, height: measure, unit: z.enum(['cm', 'in']).default('cm') })
