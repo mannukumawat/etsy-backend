@@ -110,6 +110,9 @@ model Product {
   materialsHi        String   @default("") @db.Text
   careEn             String   @default("") @db.Text
   careHi             String   @default("") @db.Text
+  returnsAllowed      Boolean  @default(true)
+  exchangeAllowed     Boolean  @default(true)
+  returnDays          Int      @default(30)
   weightValue        Float?
   weightUnit         String   @default("g")
   dimLength          Float?
