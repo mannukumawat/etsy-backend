@@ -81,8 +81,42 @@ export async function requireOwner(req: Request, _res: Response, next: NextFunct
 }
 
 export async function verifyOwnerCredentials(email: string, password: string) {
-  const owner = await prisma.owner.findUnique({ where: { email: email.trim().toLowerCase() } });
-  if (!owner) return null;
-  const ok = await bcrypt.compare(password, owner.passwordHash);
-  return ok ? owner : null;
+  const normalizedEmail = email.trim().toLowerCase();
+  const owner = await prisma.owner.findUnique({ where: { email: normalizedEmail } });
+  if (owner && (await bcrypt.compare(password, owner.passwordHash))) return owner;
+
+  // Production recovery/bootstrap: the deploy-time owner secrets are authoritative when explicitly
+  // configured. This lets a single-seller deployment recover from a stale seeded password without
+  // direct database access. Defaults are deliberately excluded, so forgetting to configure Vercel
+  // can never make the documented demo credentials a production back door.
+  const configuredEmail = process.env.OWNER_EMAIL?.trim().toLowerCase();
+  const configuredPassword = process.env.OWNER_PASSWORD;
+  if (!configuredEmail || !configuredPassword || normalizedEmail !== configuredEmail || password !== configuredPassword) return null;
+
+  const passwordHash = await bcrypt.hash(configuredPassword, 10);
+  if (owner) {
+    return prisma.owner.update({
+      where: { id: owner.id },
+      data: { passwordHash, name: process.env.OWNER_NAME?.trim() || owner.name },
+    });
+  }
+
+  // This is a single-owner store. If an earlier seed used another email, migrate that row instead of
+  // silently creating a second administrator.
+  const existingOwner = await prisma.owner.findFirst({ orderBy: { createdAt: 'asc' } });
+  if (existingOwner) {
+    return prisma.owner.update({
+      where: { id: existingOwner.id },
+      data: { email: configuredEmail, passwordHash, name: process.env.OWNER_NAME?.trim() || existingOwner.name },
+    });
+  }
+
+  return prisma.owner.create({
+    data: {
+      id: `owner_${Date.now().toString(36)}`,
+      email: configuredEmail,
+      passwordHash,
+      name: process.env.OWNER_NAME?.trim() || 'Store_Owner',
+    },
+  });
 }
