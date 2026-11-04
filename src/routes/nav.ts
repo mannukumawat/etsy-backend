@@ -16,7 +16,7 @@ navLinksRouter.use(requireOwner);
 navLinksRouter.get(
   '/',
   route(async (_req, res) => {
-    const rows = await prisma.navLink.findMany({ orderBy: { position: 'asc' } });
+    const rows = await prisma.navLink.findMany({ orderBy: { position: 'asc' }, include: { _count: { select: { products: true } } } });
     res.json({ items: rows.map(toAdminNavLink) });
   }),
 );
