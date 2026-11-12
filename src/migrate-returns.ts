@@ -7,26 +7,25 @@ import { prisma } from './db.js';
 async function run() {
   console.log('Running returns migration...');
 
-  // Add columns to order_lines (split into individual statements for MariaDB compatibility)
-  const lineAlters = [
-    `ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS cancelled_qty INT NOT NULL DEFAULT 0`,
-    `ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS returned_qty INT NOT NULL DEFAULT 0`,
-    `ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS delivered_at DATETIME NULL`,
-    `ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS return_window_days INT NULL`,
-    `ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS return_shipping_fee INT NOT NULL DEFAULT 0`,
+  // Add columns to order_lines. MySQL has no `ADD COLUMN IF NOT EXISTS` (only MariaDB does), so check first.
+  const lineColumns: Array<[string, string]> = [
+    ['cancelled_qty', 'INT NOT NULL DEFAULT 0'],
+    ['returned_qty', 'INT NOT NULL DEFAULT 0'],
+    ['delivered_at', 'DATETIME NULL'],
+    ['return_window_days', 'INT NULL'],
+    ['return_shipping_fee', 'INT NOT NULL DEFAULT 0'],
   ];
-
-  for (const sql of lineAlters) {
-    try {
-      await prisma.$executeRawUnsafe(sql);
-      console.log('OK:', sql.slice(0, 60));
-    } catch (e: any) {
-      if (e.message?.includes('Duplicate column')) {
-        console.log('SKIP (already exists):', sql.slice(0, 60));
-      } else {
-        throw e;
-      }
+  const existing = await prisma.$queryRawUnsafe<{ c: string }[]>(
+    `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_lines'`,
+  );
+  const have = new Set(existing.map((r) => r.c));
+  for (const [name, def] of lineColumns) {
+    if (have.has(name)) {
+      console.log('SKIP (already exists): order_lines.' + name);
+      continue;
     }
+    await prisma.$executeRawUnsafe(`ALTER TABLE order_lines ADD COLUMN ${name} ${def}`);
+    console.log('OK: order_lines.' + name);
   }
 
   // return_requests

@@ -66,7 +66,7 @@ adminReturnsRouter.get(
     if (status) { where += ' AND rr.status = ?'; params.push(status); }
     if (orderId) { where += ' AND rr.order_id = ?'; params.push(orderId); }
     if (q) {
-      where += ' AND (rr.reference LIKE ? OR o.customer_email LIKE ? OR o.customer_name LIKE ? OR o.number LIKE ?)';
+      where += ' AND (rr.reference LIKE ? OR o.customerEmail LIKE ? OR o.customerName LIKE ? OR o.number LIKE ?)';
       const like = `%${q}%`;
       params.push(like, like, like, like);
     }
@@ -81,8 +81,8 @@ adminReturnsRouter.get(
       order_number: string; customer_email: string; customer_name: string;
       name_en: string; variant_label_en: string; unit_price: number;
     }>>(
-      `SELECT rr.*, o.number as order_number, o.customer_email, o.customer_name,
-              ol.name_en, ol.variant_label_en, ol.unit_price
+      `SELECT rr.*, o.number as order_number, o.customerEmail AS customer_email, o.customerName AS customer_name,
+              ol.nameEn AS name_en, ol.variantLabelEn AS variant_label_en, ol.unitPrice AS unit_price
        FROM return_requests rr
        JOIN orders o ON o.id = rr.order_id
        LEFT JOIN order_lines ol ON ol.id = rr.order_line_id
@@ -126,7 +126,7 @@ adminReturnsRouter.get(
     // Enrich with order + line info
     const order = await prisma.order.findUnique({ where: { id: row.order_id } });
     const lines = await prisma.$queryRawUnsafe<Array<{ name_en: string; variant_label_en: string; unit_price: number }>>(
-      `SELECT name_en, variant_label_en, unit_price FROM order_lines WHERE id = ?`, row.order_line_id,
+      `SELECT nameEn AS name_en, variantLabelEn AS variant_label_en, unitPrice AS unit_price FROM order_lines WHERE id = ?`, row.order_line_id,
     );
 
     res.json({
@@ -264,7 +264,7 @@ adminReturnsRouter.patch(
     if (input.restockAccepted && input.acceptedQty > 0) {
       // Restore stock for accepted qty
       const lines = await prisma.$queryRawUnsafe<Array<{ variant_id: string; sku: string; name_en: string; name_hi: string; variant_label_en: string; product_id: string }>>(
-        `SELECT ol.variant_id, ol.sku, ol.name_en, ol.name_hi, ol.variant_label_en, ol.product_id FROM order_lines ol WHERE ol.id = ?`,
+        `SELECT ol.variantId AS variant_id, ol.sku, ol.nameEn AS name_en, ol.nameHi AS name_hi, ol.variantLabelEn AS variant_label_en, ol.productId AS product_id FROM order_lines ol WHERE ol.id = ?`,
         row.order_line_id,
       );
       if (lines[0]) {

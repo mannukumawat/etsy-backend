@@ -26,7 +26,7 @@ async function loadReturnForCustomer(ref: string, customerId: string) {
   const rows = await prisma.$queryRawUnsafe<ReturnRequestRow[]>(
     `SELECT rr.* FROM return_requests rr
      JOIN orders o ON o.id = rr.order_id
-     WHERE rr.reference = ? AND o.customer_id = ? AND o.customer_kind = 'account'`,
+     WHERE rr.reference = ? AND o.customerId = ? AND o.customerKind = 'account'`,
     ref, customerId,
   );
   if (!rows[0]) throw notFound('Return request not found.');
@@ -58,7 +58,7 @@ customerCancelRouter.post(
       cancelled_qty: number; unit_price: number; line_total: number;
       name_en: string; name_hi: string; variant_label_en: string;
     }>>(
-      `SELECT id, variant_id, sku, quantity, cancelled_qty, unit_price, line_total, name_en, name_hi, variant_label_en FROM order_lines WHERE id = ? AND order_id = ?`,
+      `SELECT id, variantId AS variant_id, sku, quantity, cancelled_qty, unitPrice AS unit_price, lineTotal AS line_total, nameEn AS name_en, nameHi AS name_hi, variantLabelEn AS variant_label_en FROM order_lines WHERE id = ? AND orderId = ?`,
       lineId, orderId,
     );
     const line = lines[0];
@@ -69,6 +69,7 @@ customerCancelRouter.post(
       throw badRequest(`Cannot cancel ${input.qty} — only ${line.quantity - (line.cancelled_qty ?? 0)} uncancelled units remain.`);
     }
     const allCancelled = cancelledQty >= line.quantity;
+    let orderCancelled = false;
 
     await prisma.$transaction(async (tx) => {
       // Update cancelled quantity
@@ -112,9 +113,27 @@ customerCancelRouter.post(
           actor: 'customer',
         },
       });
+
+      // Nothing left to ship (every unit of every line cancelled) -> the whole order is cancelled.
+      const left = await tx.$queryRawUnsafe<Array<{ remaining: number | bigint | null }>>(
+        `SELECT COALESCE(SUM(quantity - cancelled_qty), 0) AS remaining FROM order_lines WHERE orderId = ?`,
+        orderId,
+      );
+      if (Number(left[0]?.remaining ?? 1) <= 0) {
+        orderCancelled = true;
+        await tx.order.update({ where: { id: orderId }, data: { fulfilmentStatus: 'cancelled', restocked: true } });
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            type: 'cancelled',
+            message: `Cancelled: every item was cancelled by the customer.${order.paymentStatus === 'paid' ? ' Payment was already received, so a refund is due.' : ''}`,
+            actor: 'customer',
+          },
+        });
+      }
     });
 
-    res.json({ ok: true, cancelledQty, allCancelled });
+    res.json({ ok: true, cancelledQty, allCancelled, orderCancelled });
   }),
 );
 
@@ -144,9 +163,9 @@ customerReturnsRouter.post(
       returned_qty: number; delivered_at: Date | null; return_window_days: number | null;
       unit_price: number; line_total: number; name_en: string; product_id: string;
     }>>(
-      `SELECT id, variant_id, quantity, cancelled_qty, returned_qty, delivered_at, return_window_days,
-              unit_price, line_total, name_en, product_id
-       FROM order_lines WHERE id = ? AND order_id = ?`,
+      `SELECT id, variantId AS variant_id, quantity, cancelled_qty, returned_qty, delivered_at, return_window_days,
+              unitPrice AS unit_price, lineTotal AS line_total, nameEn AS name_en, productId AS product_id
+       FROM order_lines WHERE id = ? AND orderId = ?`,
       input.lineId, input.orderId,
     );
     const line = lines[0];
@@ -183,7 +202,7 @@ customerReturnsRouter.post(
 
     // Check product returnsAllowed
     const product = await prisma.$queryRawUnsafe<Array<{ returns_allowed: number }>>(
-      `SELECT COALESCE(returns_allowed, 1) AS returns_allowed FROM products WHERE id = ?`,
+      `SELECT COALESCE(returnsAllowed, 1) AS returns_allowed FROM products WHERE id = ?`,
       line.product_id,
     );
     if (product[0] && product[0].returns_allowed === 0) {
@@ -243,7 +262,7 @@ customerReturnsRouter.get(
     const rows = await prisma.$queryRawUnsafe<ReturnRequestRow[]>(
       `SELECT rr.* FROM return_requests rr
        JOIN orders o ON o.id = rr.order_id
-       WHERE o.customer_id = ? AND o.customer_kind = 'account'
+       WHERE o.customerId = ? AND o.customerKind = 'account'
        ORDER BY rr.requested_at DESC`,
       customerId,
     );

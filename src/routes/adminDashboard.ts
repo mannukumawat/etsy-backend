@@ -95,7 +95,7 @@ adminDashboardRouter.get(
       outOfStockVariants,
       salesSeries,
       topProducts,
-      recentOrders: ordersInRange.slice(0, 5).map(toAdminOrder),
+      recentOrders: ordersInRange.slice(0, 5).map((o) => toAdminOrder(o)),
     });
   }),
 );

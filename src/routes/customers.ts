@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { clearCustomerSession, hashPassword, issueCustomerSession, requireCustomer, verifyCustomerCredentials } from '../customerAuth.js';
 import { prisma } from '../db.js';
 import { badRequest, conflict, notFound, route, unauthorized } from '../http.js';
+import { loadLineExtras } from '../orderLineExtras.js';
 import { ORDER_INCLUDE, toCustomerPublic, toSavedAddress, toStorefrontOrder } from '../mappers.js';
 import { env } from '../env.js';
 import { sendMail } from '../mailer.js';
@@ -268,7 +269,8 @@ customerRouter.get(
   '/orders',
   route(async (req, res) => {
     const rows = await prisma.order.findMany({ where: { customerId: req.customer!.sub }, include: ORDER_INCLUDE, orderBy: { createdAt: 'desc' } });
-    res.json({ items: rows.map(toStorefrontOrder) });
+    const extras = await loadLineExtras(rows.map((r) => r.id));
+    res.json({ items: rows.map((r) => toStorefrontOrder(r, extras)) });
   }),
 );
 
@@ -277,6 +279,6 @@ customerRouter.get(
   route(async (req, res) => {
     const row = await prisma.order.findUnique({ where: { id: req.params.id }, include: ORDER_INCLUDE });
     if (!row || row.customerId !== req.customer!.sub) throw notFound('Order not found.');
-    res.json(toStorefrontOrder(row));
+    res.json(toStorefrontOrder(row, await loadLineExtras([row.id])));
   }),
 );

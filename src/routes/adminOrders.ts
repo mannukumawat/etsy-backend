@@ -3,6 +3,7 @@ import { requireOwner } from '../auth.js';
 import { prisma } from '../db.js';
 import { badRequest, conflict, notFound, route } from '../http.js';
 import { ORDER_INCLUDE, toAdminOrder } from '../mappers.js';
+import { loadLineExtras } from '../orderLineExtras.js';
 import {
   addNoteSchema,
   advanceOrderSchema,
@@ -35,7 +36,8 @@ adminOrdersRouter.get(
       orderBy: { createdAt: 'desc' },
       take: 500,
     });
-    res.json({ items: rows.map(toAdminOrder), total: rows.length });
+    const extras = await loadLineExtras(rows.map((r) => r.id));
+    res.json({ items: rows.map((r) => toAdminOrder(r, extras)), total: rows.length });
   }),
 );
 
@@ -44,7 +46,7 @@ adminOrdersRouter.get(
   route(async (req, res) => {
     const row = await prisma.order.findUnique({ where: { id: req.params.id }, include: ORDER_INCLUDE });
     if (!row) throw notFound('Order not found.');
-    res.json(toAdminOrder(row));
+    res.json(toAdminOrder(row, await loadLineExtras([row.id])));
   }),
 );
 

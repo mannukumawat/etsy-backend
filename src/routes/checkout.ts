@@ -5,6 +5,7 @@ import { prisma } from '../db.js';
 import { badRequest, conflict, notFound, route } from '../http.js';
 import { mediaUrl } from '../env.js';
 import { toStorefrontOrder, toStorefrontOrderTrack, ORDER_INCLUDE } from '../mappers.js';
+import { loadLineExtras } from '../orderLineExtras.js';
 import { couponValidationLimiter, orderLookupLimiter } from '../rateLimit.js';
 import {
   buildRateSnapshot,
@@ -393,6 +394,6 @@ orderTrackRouter.get(
     }
 
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json(toStorefrontOrder(order));
+    res.json(toStorefrontOrder(order, await loadLineExtras([order.id])));
   }),
 );

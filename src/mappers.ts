@@ -480,7 +480,7 @@ function toStorefrontRateSnapshot(rateSnapshotJson: string) {
   return { base: stored.base, rates: stored.rates, asOf: stored.asOf, illustrative: true as const };
 }
 
-export function toAdminOrder(o: OrderRow) {
+export function toAdminOrder(o: OrderRow, extras?: LineExtras) {
   return {
     id: o.id,
     number: o.number,
@@ -501,6 +501,8 @@ export function toAdminOrder(o: OrderRow) {
       unitPrice: l.unitPrice,
       quantity: l.quantity,
       lineTotal: l.lineTotal,
+      cancelledQty: extras?.get(l.id)?.cancelledQty ?? 0,
+      returnedQty: extras?.get(l.id)?.returnedQty ?? 0,
     })),
     subtotal: o.subtotal,
     discount: o.discount,
@@ -534,9 +536,12 @@ const STOREFRONT_STATUS: Record<string, 'placed' | 'processing' | 'shipped' | 'd
   cancelled: 'cancelled',
 };
 
-export function toStorefrontOrder(o: OrderRow) {
+/** Per order-line cancel/return counters (columns outside the Prisma model; see orderLineExtras.ts). */
+export type LineExtras = Map<string, { cancelledQty: number; returnedQty: number }>;
+
+export function toStorefrontOrder(o: OrderRow, extras?: LineExtras) {
   const timeline = o.events
-    .filter((e) => e.type === 'created' || e.type === 'fulfilment' || e.type === 'cancelled')
+    .filter((e) => e.type === 'created' || e.type === 'fulfilment' || (e.type === 'cancelled' && !e.message.startsWith('Item cancelled')))
     .map((e) => ({ status: e.type === 'created' ? 'placed' : (STOREFRONT_STATUS[e.message.split(':')[0]] ?? STOREFRONT_STATUS[o.fulfilmentStatus]), date: e.at.toISOString() }));
   return {
     id: o.id,
@@ -546,6 +551,7 @@ export function toStorefrontOrder(o: OrderRow) {
     email: o.customerEmail,
     phone: o.customerPhone,
     lines: o.lines.map((l) => ({
+      id: l.id,
       productId: l.productId,
       variantId: l.variantId,
       slug: l.slug,
@@ -555,6 +561,8 @@ export function toStorefrontOrder(o: OrderRow) {
       unitPrice: l.unitPrice,
       quantity: l.quantity,
       lineTotal: l.lineTotal,
+      cancelledQty: extras?.get(l.id)?.cancelledQty ?? 0,
+      returnedQty: extras?.get(l.id)?.returnedQty ?? 0,
     })),
     currency: o.currency,
     rateSnapshot: toStorefrontRateSnapshot(o.rateSnapshotJson),
@@ -563,7 +571,8 @@ export function toStorefrontOrder(o: OrderRow) {
     ...(o.couponCode ? { couponCode: o.couponCode } : {}),
     shipping: o.shipping,
     tax: o.tax,
-    taxRate: o.taxRate,
+    // Stored as a percentage (12 = 12%); the storefront formats a fraction (0.12).
+    taxRate: o.taxRate / 100,
     total: o.total,
     shippingMethod: { id: o.shippingMethodId as 'standard' | 'express', minDays: o.shippingMinDays, maxDays: o.shippingMaxDays },
     address: JSON.parse(o.shippingAddressJson),

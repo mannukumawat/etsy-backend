@@ -813,6 +813,22 @@ model ContentTranslation {
   @@map("content_translations")
 }
 
+model ContactMessage {
+  id          String   @id @default(cuid())
+  name        String   @db.VarChar(100)
+  email       String   @db.VarChar(200)
+  subject     String   @db.VarChar(50)
+  orderNumber String   @default("") @db.VarChar(30)
+  message     String   @db.Text
+  status      String   @default("unread") @db.VarChar(20) // unread | read | replied
+  note        String?  @db.Text // internal admin note
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
+}
+
 // ---------------------------------------------------------------------------------------------
 // Returns & Refunds — tables created via migrate-returns.ts (raw SQL).
 // These model blocks are for IDE documentation only. Do NOT run prisma generate/db push

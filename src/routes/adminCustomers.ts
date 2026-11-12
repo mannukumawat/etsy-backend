@@ -114,6 +114,6 @@ adminCustomersRouter.get(
       orderBy: { createdAt: 'desc' },
     });
 
-    res.json({ summary, account: account ? toAdminCustomerAccount(account, addresses.map(toSavedAddress)) : null, orders: orderRows.map(toAdminOrder) });
+    res.json({ summary, account: account ? toAdminCustomerAccount(account, addresses.map(toSavedAddress)) : null, orders: orderRows.map((o) => toAdminOrder(o)) });
   }),
 );
