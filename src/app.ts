@@ -29,6 +29,9 @@ import { adminContactsRouter } from './routes/adminContacts.js';
 import { adminHelpRouter, publicHelpRouter } from './routes/help.js';
 import { importExportRouter } from './routes/importExport.js';
 import { customerCancelRouter, customerReturnsRouter } from './routes/returns.js';
+import { customerExchangesRouter } from './routes/exchanges.js';
+import { customerBankAccountsRouter } from './routes/bankAccounts.js';
+import { adminExchangesRouter } from './routes/adminExchanges.js';
 import { translationsRouter } from './routes/translations.js';
 import { uiI18nAdminRouter, uiI18nPublicRouter } from './routes/uiI18n.js';
 import { stripHindiResponses, translateResponses } from './translations.js';
@@ -107,6 +110,7 @@ export function createApp() {
   app.use('/api/admin/collections', collectionsRouter);
   app.use('/api/admin/reviews', adminReviewsRouter);
   app.use('/api/admin/returns', adminReturnsRouter);
+  app.use('/api/admin/exchanges', adminExchangesRouter);
   app.use('/api/admin/contacts', adminContactsRouter);
   app.use('/api/admin/help', adminHelpRouter);
   app.use('/api/help', publicHelpRouter);
@@ -118,6 +122,8 @@ export function createApp() {
   app.use('/api/customer/auth', customerAuthRouter);
   app.use('/api/customer/reviews', customerReviewsRouter);
   app.use('/api/customer/returns', customerReturnsRouter);
+  app.use('/api/customer/exchanges', customerExchangesRouter);
+  app.use('/api/customer/bank-accounts', customerBankAccountsRouter);
   app.use('/api/customer/orders', customerCancelRouter);
   app.use('/api/customer', customerRouter);
   app.use('/api/checkout', checkoutRouter);

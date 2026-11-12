@@ -766,6 +766,8 @@ export function toAdminReturn(r: ReturnRequestRow, events: ReturnEventRow[] = []
     rejectionReason: r.rejection_reason,
     restockQty: r.restock_qty,
     pickupAddress: r.pickup_address,
+    refundAccountId: (r as any).refund_account_id ?? null,
+    refundMethodOverride: (r as any).refund_method_override ?? null,
     refund: refund ? {
       id: refund.id, amount: refund.amount, method: refund.method,
       status: refund.status, reference: refund.reference,
@@ -774,5 +776,88 @@ export function toAdminReturn(r: ReturnRequestRow, events: ReturnEventRow[] = []
       failedAt: refund.failed_at ? (refund.failed_at instanceof Date ? refund.failed_at.toISOString() : String(refund.failed_at)) : null,
       createdAt: refund.created_at instanceof Date ? refund.created_at.toISOString() : String(refund.created_at),
     } : null,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Exchanges
+// ---------------------------------------------------------------------------------------------
+
+export interface ExchangeRequestRow {
+  id: string; reference: string; order_id: string; order_line_id: string;
+  original_variant_id: string; replacement_variant_id: string;
+  requested_qty: number; approved_qty: number | null;
+  reason: string; customer_note: string | null; admin_note: string | null;
+  rejection_reason: string | null; status: string;
+  price_difference: number; exchange_window_days: number;
+  replacement_carrier: string | null; replacement_tracking: string | null;
+  requested_at: Date; decided_at: Date | null; shipped_at: Date | null;
+  delivered_at: Date | null; closed_at: Date | null;
+}
+
+export interface ExchangeEventRow {
+  id: string; exchange_id: string; type: string; actor: string;
+  actor_id: string | null; message: string | null; created_at: Date;
+}
+
+const isoDate = (d: Date | null | undefined) =>
+  d ? (d instanceof Date ? d.toISOString() : String(d)) : null;
+
+export function toPublicExchange(r: ExchangeRequestRow, events: ExchangeEventRow[] = []) {
+  return {
+    id: r.id,
+    reference: r.reference,
+    orderId: r.order_id,
+    lineId: r.order_line_id,
+    originalVariantId: r.original_variant_id,
+    replacementVariantId: r.replacement_variant_id,
+    requestedQty: r.requested_qty,
+    approvedQty: r.approved_qty,
+    reason: r.reason,
+    customerNote: r.customer_note,
+    status: r.status,
+    priceDifference: r.price_difference,
+    exchangeWindowDays: r.exchange_window_days,
+    replacementCarrier: r.replacement_carrier,
+    replacementTracking: r.replacement_tracking,
+    requestedAt: isoDate(r.requested_at)!,
+    decidedAt: isoDate(r.decided_at),
+    shippedAt: isoDate(r.shipped_at),
+    deliveredAt: isoDate(r.delivered_at),
+    closedAt: isoDate(r.closed_at),
+    events: events.map(e => ({
+      id: e.id, type: e.type, actor: e.actor,
+      message: e.message,
+      createdAt: isoDate(e.created_at)!,
+    })),
+  };
+}
+
+export function toAdminExchange(r: ExchangeRequestRow, events: ExchangeEventRow[] = []) {
+  const base = toPublicExchange(r, events);
+  return {
+    ...base,
+    adminNote: r.admin_note,
+    rejectionReason: r.rejection_reason,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Customer bank accounts
+// ---------------------------------------------------------------------------------------------
+
+export interface BankAccountRow {
+  id: string; customer_id: string; account_holder_name: string;
+  account_number_encrypted: string; account_number_last4: string;
+  ifsc_code: string; is_active: number; created_at: Date;
+}
+
+export function toPublicBankAccount(r: BankAccountRow) {
+  return {
+    id: r.id,
+    accountHolderName: r.account_holder_name,
+    accountNumberMasked: `•••• ${r.account_number_last4}`,
+    ifscCode: r.ifsc_code,
+    createdAt: isoDate(r.created_at)!,
   };
 }

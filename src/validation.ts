@@ -711,6 +711,7 @@ export const createReturnSchema = z.object({
   note: z.string().max(1000).optional(),
   photos: z.array(z.string()).max(5).optional().default([]),
   shippingMethod: z.enum(['self_ship', 'pickup']).optional(),
+  refundAccountId: z.string().optional(),
 });
 
 export const approveReturnSchema = z.object({
@@ -755,6 +756,39 @@ export const processReturnRefundSchema = z.object({
 
 export const addReturnNoteSchema = z.object({
   body: z.string().min(1).max(2000),
+});
+
+export const createExchangeSchema = z.object({
+  orderId: z.string().min(1),
+  lineId: z.string().min(1),
+  qty: z.number().int().min(1),
+  reason: z.enum(['wrong_size', 'wrong_color', 'damaged', 'not_as_described', 'changed_mind', 'other']),
+  note: z.string().max(1000).optional(),
+  replacementVariantId: z.string().min(1),
+});
+
+export const approveExchangeSchema = z.object({
+  approvedQty: z.number().int().min(1),
+  note: z.string().max(1000).optional(),
+});
+
+export const rejectExchangeSchema = z.object({
+  reason: z.string().min(1).max(1000),
+});
+
+export const shipExchangeSchema = z.object({
+  carrier: z.string().min(1),
+  tracking: z.string().min(1),
+});
+
+export const addBankAccountSchema = z.object({
+  accountHolderName: z.string().min(1).max(255),
+  accountNumber: z.string().regex(/^\d{9,18}$/, 'Account number must be 9–18 digits.'),
+  accountNumberConfirm: z.string(),
+  ifscCode: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code.'),
+}).refine(d => d.accountNumber === d.accountNumberConfirm, {
+  message: 'Account numbers do not match.',
+  path: ['accountNumberConfirm'],
 });
 
 export const codCollectionSchema = z.object({

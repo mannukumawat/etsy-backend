@@ -216,14 +216,25 @@ customerReturnsRouter.post(
     const reference = generateReturnRef();
     const photosJson = JSON.stringify(input.photos ?? []);
 
+    // Validate refund account ownership if provided
+    if (input.refundAccountId) {
+      const acctRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+        `SELECT id FROM customer_bank_accounts WHERE id = ? AND customer_id = ? AND is_active = 1`,
+        input.refundAccountId, customerId,
+      );
+      if (!acctRows[0]) {
+        throw badRequest('Refund bank account not found or does not belong to you.');
+      }
+    }
+
     await prisma.$executeRawUnsafe(
       `INSERT INTO return_requests
        (id, reference, order_id, order_line_id, variant_id, requested_qty, reason, customer_note,
-        photos, status, shipping_method, refundable_amount, return_window_days, requested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, NOW(3))`,
+        photos, status, shipping_method, refundable_amount, return_window_days, refund_account_id, requested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, NOW(3))`,
       id, reference, input.orderId, input.lineId, line.variant_id,
       input.qty, input.reason, input.note ?? null, photosJson,
-      input.shippingMethod ?? null, refundableAmount, windowDays,
+      input.shippingMethod ?? null, refundableAmount, windowDays, input.refundAccountId ?? null,
     );
 
     // Reserve qty
