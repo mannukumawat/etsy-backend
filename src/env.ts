@@ -24,6 +24,12 @@ const schema = z.object({
   OWNER_PASSWORD: z.string().min(8).default('AdminDemo2026'),
   OWNER_NAME: z.string().default('Store Owner'),
 
+  // --- Live currency rates -----------------------------------------------------------------------
+  // The server refreshes "Live" currencies every 6 hours. Set CURRENCY_AUTO_SYNC=false to disable the timer.
+  // On Vercel (no timers) set CRON_SECRET: Vercel Cron then calls /api/settings/cron/currency-rates daily.
+  CURRENCY_AUTO_SYNC: z.string().default('true'),
+  CRON_SECRET: z.string().min(16).optional(),
+
   // --- Customer sessions -------------------------------------------------------------------------
   // Reuses JWT_SECRET to sign tokens (a separate cookie name keeps the two sessions independent);
   // no extra configuration is required to run the customer-auth flow.

@@ -17,6 +17,7 @@ export const publicContentRouter = Router();
 async function assertHomepageReferencesExist(c: HomepageContentInput, publishing: boolean) {
   if (c.hero.imageId) await assertMedia(c.hero.imageId, 'hero.imageId');
   if (c.story.imageId) await assertMedia(c.story.imageId, 'story.imageId');
+  for (const [i, sl] of c.slides.entries()) if (sl.imageId) await assertMedia(sl.imageId, `slides.${i}.imageId`);
 
   const productIds = [...new Set([...c.featuredProductIds, ...c.bestsellerProductIds, ...c.newArrivalProductIds, ...c.itemsProductIds, ...c.transferProductIds])];
   if (productIds.length) {
@@ -39,6 +40,11 @@ async function assertHomepageReferencesExist(c: HomepageContentInput, publishing
       }
     }
   }
+}
+
+async function assertPageMedia(c: PageContentInput) {
+  if (c.heroImageId) await assertMedia(c.heroImageId, 'heroImageId');
+  for (const [i, s] of c.sections.entries()) if (s.imageId) await assertMedia(s.imageId, `sections.${i}.imageId`);
 }
 
 async function assertMedia(id: string, path: string) {
@@ -131,6 +137,7 @@ contentRouter.put(
   route(async (req, res) => {
     assertPageKey(req.params.key);
     const input: PageContentInput = pageContentSchema.parse(req.body);
+    await assertPageMedia(input);
     const row = await prisma.pageDoc.upsert({
       where: { key: req.params.key },
       create: { key: req.params.key, isLegal: LEGAL_PAGES.has(req.params.key), draftJson: stringifyJson(input), updatedBy: req.owner!.email },
@@ -146,7 +153,7 @@ contentRouter.post(
     assertPageKey(req.params.key);
     const row = await prisma.pageDoc.findUnique({ where: { key: req.params.key } });
     if (!row) throw notFound('No draft to publish.');
-    pageContentSchema.parse(JSON.parse(row.draftJson));
+    await assertPageMedia(pageContentSchema.parse(JSON.parse(row.draftJson)));
     const updated = await prisma.pageDoc.update({
       where: { key: req.params.key },
       data: { publishedJson: row.draftJson, publishedAt: new Date(), updatedBy: req.owner!.email },
@@ -173,6 +180,7 @@ const LEGAL_PAGES = new Set<string>(['returns', 'privacy', 'terms']);
 const EMPTY_HOMEPAGE: HomepageContentInput = homepageContentSchema.parse({
   announcement: { enabled: false, text: { en: '', hi: '' } },
   hero: { title: { en: 'Your Store' }, subtitle: { en: '' }, imageId: null, ctaLabel: { en: 'Shop now' }, ctaHref: '/shop' },
+  slides: [],
   featuredCategoryIds: [],
   featuredProductIds: [],
   bestsellerProductIds: [],
@@ -186,7 +194,7 @@ const EMPTY_HOMEPAGE: HomepageContentInput = homepageContentSchema.parse({
 async function ensurePage(key: PageKey) {
   return prisma.pageDoc.upsert({
     where: { key },
-    create: { key, isLegal: LEGAL_PAGES.has(key), draftJson: stringifyJson({ title: { en: '' }, intro: { en: '' }, sections: [] }) },
+    create: { key, isLegal: LEGAL_PAGES.has(key), draftJson: stringifyJson({ title: { en: '' }, intro: { en: '' }, heroImageId: null, sections: [] }) },
     update: {},
   });
 }

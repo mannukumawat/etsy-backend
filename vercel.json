@@ -6,6 +6,12 @@
       "use": "@vercel/node"
     }
   ],
+  "crons": [
+    {
+      "path": "/api/settings/cron/currency-rates",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "routes": [
     {
       "src": "/(.*)",

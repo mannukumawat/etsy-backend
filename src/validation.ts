@@ -292,6 +292,7 @@ const currencyConfigSchema = z.object({
   name: z.string().trim().min(1).max(40),
   enabled: z.boolean(),
   rate: z.number().positive().max(100_000),
+  autoRate: z.boolean().default(false),
   fractionDigits: z.number().int().min(0).max(4),
   roundingIncrement: z.number().int().positive().max(1000),
 });
@@ -350,6 +351,20 @@ export const homepageContentSchema = z
       ctaLabel: localized(40, true),
       ctaHref: z.string().trim().default(''),
     }),
+    /** Extra banners shown after the hero in the homepage slider. */
+    slides: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          imageId: z.string().nullable().default(null),
+          title: localized(120),
+          subtitle: localized(240),
+          ctaLabel: localized(40),
+          ctaHref: z.string().trim().default(''),
+        }),
+      )
+      .max(6, 'Use at most 6 slider banners.')
+      .default([]),
     featuredCategoryIds: z.array(z.string().min(1)).max(50).default([]),
     featuredProductIds: idList(12),
     bestsellerProductIds: idList(12),
@@ -369,6 +384,10 @@ export const homepageContentSchema = z
     const add = (path: (string | number)[], message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
     if (c.announcement.enabled && !c.announcement.text.en.trim()) add(['announcement', 'text', 'en'], 'Announcement text is required while the bar is enabled.');
     if (!isSiteLinkOrUrl(c.hero.ctaHref)) add(['hero', 'ctaHref'], 'Use a site path like /shop or a full https:// URL.');
+    c.slides.forEach((sl, i) => {
+      if (!sl.imageId) add(['slides', i, 'imageId'], 'Choose an image for this banner.');
+      if (!isSiteLinkOrUrl(sl.ctaHref)) add(['slides', i, 'ctaHref'], 'Use a site path like /shop or a full https:// URL.');
+    });
     if (c.story.ctaHref && !isSiteLinkOrUrl(c.story.ctaHref)) add(['story', 'ctaHref'], 'Use a site path like /about or a full https:// URL.');
   });
 export type HomepageContentInput = z.infer<typeof homepageContentSchema>;
@@ -376,8 +395,10 @@ export type HomepageContentInput = z.infer<typeof homepageContentSchema>;
 export const pageContentSchema = z.object({
   title: localized(100, true),
   intro: localized(500),
+  /** Optional banner image (used by the About page). */
+  heroImageId: z.string().nullable().default(null),
   sections: z
-    .array(z.object({ id: z.string().min(1), heading: localized(100, true), body: localized(3000, true) }))
+    .array(z.object({ id: z.string().min(1), heading: localized(100, true), body: localized(3000, true), imageId: z.string().nullable().default(null) }))
     .max(30, 'Use at most 30 sections.')
     .default([]),
 });

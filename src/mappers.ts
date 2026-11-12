@@ -259,8 +259,8 @@ export function toAdminTaxRule(r: { id: string; country: string; region: string;
   return { id: r.id, country: r.country, region: r.region, rate: r.rate, label: r.label };
 }
 
-export function toAdminCurrencyConfig(c: { code: string; name: string; enabled: boolean; rate: number; fractionDigits: number; roundingIncrement: number }) {
-  return { code: c.code, name: c.name, enabled: c.enabled, rate: c.rate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement };
+export function toAdminCurrencyConfig(c: { code: string; name: string; enabled: boolean; rate: number; autoRate: boolean; fractionDigits: number; roundingIncrement: number }) {
+  return { code: c.code, name: c.name, enabled: c.enabled, rate: c.rate, autoRate: c.code !== 'USD' && c.autoRate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -375,11 +375,18 @@ export function toStorefrontHomepage(published: Record<string, unknown>) {
     ...localized,
     hero: resolveImage(localized.hero),
     story: resolveImage(localized.story),
+    slides: Array.isArray(localized.slides) ? localized.slides.map((s) => resolveImage(s)) : [],
   };
 }
 
 export function toStorefrontPageContent(published: Record<string, unknown>) {
-  return toStorefrontLocalized(published);
+  const localized = toStorefrontLocalized(published) as Record<string, unknown>;
+  const { heroImageId, sections, ...rest } = localized;
+  return {
+    ...rest,
+    heroImage: typeof heroImageId === 'string' ? mediaUrl(heroImageId) : null,
+    sections: Array.isArray(sections) ? sections.map((s) => resolveImage(s)) : [],
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

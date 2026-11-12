@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
-import { badRequest, route } from '../http.js';
+import { timingSafeEqual } from 'node:crypto';
+import { env } from '../env.js';
+import { syncLiveRates } from '../exchangeRates.js';
+import { badRequest, HttpError, notFound, route } from '../http.js';
 import { requireOwner } from '../auth.js';
 import { stringifyJson } from '../json.js';
 import {
@@ -35,7 +38,7 @@ async function loadSettings() {
     store: toAdminStoreSettings(store),
     shipping: { zones: shipping.zones.map(toAdminShippingZone), unsupportedMessage: { en: shipping.unsupportedMessageEn }, updatedAt: shipping.updatedAt.toISOString() },
     tax: { pricesIncludeTax: tax.pricesIncludeTax, defaultRate: tax.defaultRate, rules: tax.rules.map(toAdminTaxRule), updatedAt: tax.updatedAt.toISOString() },
-    currencies: { base: currencies.base, currencies: currencies.currencies.map(toAdminCurrencyConfig), ratesUpdatedAt: currencies.ratesUpdatedAt.toISOString(), updatedAt: currencies.updatedAt.toISOString() },
+    currencies: { base: currencies.base, currencies: currencies.currencies.map(toAdminCurrencyConfig), ratesUpdatedAt: currencies.ratesUpdatedAt.toISOString(), autoSyncAt: currencies.autoSyncAt ? currencies.autoSyncAt.toISOString() : null, autoSyncError: currencies.autoSyncError, updatedAt: currencies.updatedAt.toISOString() },
   };
 }
 
@@ -139,9 +142,24 @@ settingsRouter.put(
       });
       await tx.currencyConfig.deleteMany({ where: { settingsId: 'singleton' } });
       await tx.currencyConfig.createMany({
-        data: input.currencies.map((c) => ({ settingsId: 'singleton', code: c.code, name: c.name, enabled: c.enabled, rate: c.rate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement })),
+        data: input.currencies.map((c) => ({ settingsId: 'singleton', code: c.code, name: c.name, enabled: c.enabled, rate: c.rate, autoRate: c.code !== 'USD' && c.autoRate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement })),
       });
     });
+    res.json(await loadSettings());
+  }),
+);
+
+// Fetch live exchange rates right now for every currency marked "Live" (the same job the scheduler runs).
+settingsRouter.post(
+  '/currencies/refresh',
+  route(async (_req, res) => {
+    const live = await prisma.currencyConfig.count({ where: { settingsId: 'singleton', autoRate: true, code: { not: 'USD' } } });
+    if (!live) throw badRequest('Turn on “Live rate” for at least one currency and save, then refresh.');
+    try {
+      await syncLiveRates();
+    } catch (e) {
+      throw new HttpError(502, 'upstream_error', e instanceof Error ? e.message : 'Could not fetch live rates.');
+    }
     res.json(await loadSettings());
   }),
 );
@@ -180,5 +198,20 @@ publicSettingsRouter.get(
         unsupportedMessage: { en: shipping.unsupportedMessageEn },
       },
     });
+  }),
+);
+
+// Called by a scheduler on hosts that cannot keep a timer alive (Vercel Cron sends `Authorization: Bearer $CRON_SECRET`).
+// Disabled (404) unless CRON_SECRET is configured.
+publicSettingsRouter.get(
+  '/cron/currency-rates',
+  route(async (req, res) => {
+    const secret = env.CRON_SECRET;
+    if (!secret) throw notFound();
+    const given = Buffer.from(req.header('authorization') ?? '');
+    const expected = Buffer.from(`Bearer ${secret}`);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw new HttpError(401, 'unauthorized', 'Invalid cron secret.');
+    const result = await syncLiveRates();
+    res.json({ ok: true, source: result.source, updated: result.updated.length, skipped: result.skipped });
   }),
 );

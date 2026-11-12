@@ -325,6 +325,10 @@ model CurrencySettings {
   id             String   @id @default("singleton")
   base           String   @default("USD")
   ratesUpdatedAt DateTime @default(now())
+  /// Last time the live-rate sync ran (success or failure); null = never.
+  autoSyncAt     DateTime?
+  /// Empty when the last sync succeeded; otherwise a short reason it failed.
+  autoSyncError  String   @default("") @db.Text
   updatedAt      DateTime @updatedAt
 
   currencies CurrencyConfig[]
@@ -339,6 +343,8 @@ model CurrencyConfig {
   name              String
   enabled           Boolean @default(true)
   rate              Float
+  /// true = the rate is refreshed from a live exchange-rate feed; false = typed in by hand.
+  autoRate          Boolean @default(false)
   fractionDigits    Int     @default(2)
   roundingIncrement Int     @default(1)
 

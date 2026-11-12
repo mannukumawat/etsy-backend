@@ -1,6 +1,7 @@
 import { createApp } from './app.js';
 import { assertDatabaseReachable, prisma } from './db.js';
 import { env } from './env.js';
+import { startRateScheduler } from './exchangeRates.js';
 
 async function main() {
   try {
@@ -20,6 +21,8 @@ async function main() {
     console.log(`  images        GET  /media/:id`);
     console.log(`  CORS origins  ${env.corsOrigins.join(', ')}`);
   });
+
+  startRateScheduler();
 
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down.`);
