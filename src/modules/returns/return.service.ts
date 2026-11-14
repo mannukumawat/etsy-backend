@@ -10,6 +10,23 @@ import type { ReturnRequestRow } from './return.types.js';
 
 function generateReturnRef() { return 'RET-' + randomHexId(4).toUpperCase(); }
 
+/**
+ * Allocates the amount the customer actually paid across order lines. This includes the line's
+ * proportional share of discounts, tax and outbound shipping, so a full return of a single-line
+ * order refunds the exact order total rather than only the catalogue price.
+ */
+export function calculateRefundableAmount(input: {
+  orderTotal: number;
+  orderSubtotal: number;
+  lineTotal: number;
+  lineQuantity: number;
+  requestedQuantity: number;
+}) {
+  const lineShare = Math.round((input.lineTotal * input.requestedQuantity) / input.lineQuantity);
+  if (input.orderSubtotal <= 0) return Math.min(input.orderTotal, lineShare);
+  return Math.min(input.orderTotal, Math.round((input.orderTotal * lineShare) / input.orderSubtotal));
+}
+
 async function loadReturnForCustomer(ref: string, customerId: string) {
   const rows = await prisma.$queryRawUnsafe<ReturnRequestRow[]>(
     `SELECT rr.* FROM return_requests rr
@@ -84,8 +101,15 @@ export async function requestReturn(customerId: string, input: CreateReturnInput
     throw conflict('This product is not eligible for returns.');
   }
 
-  // Calculate refundable amount: proportional unit price * qty
-  const refundableAmount = Math.round((line.unit_price * input.qty));
+  // Refund the requested units' share of what was actually paid, including tax/shipping and any
+  // order-level discount. For a single-line full return this is exactly order.total.
+  const refundableAmount = calculateRefundableAmount({
+    orderTotal: order.total,
+    orderSubtotal: order.subtotal,
+    lineTotal: line.line_total,
+    lineQuantity: line.quantity,
+    requestedQuantity: input.qty,
+  });
 
   const id = randomHexId(12);
   const reference = generateReturnRef();

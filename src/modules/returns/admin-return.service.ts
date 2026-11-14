@@ -242,7 +242,11 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
     `SELECT amount FROM refunds WHERE return_id = ?`, row.id,
   );
   const alreadyRefunded = existingRefunds.reduce((s, r) => s + r.amount, 0);
-  const maxRefund = row.refundable_amount - row.shipping_fee - alreadyRefunded;
+  const order = await prisma.order.findUnique({ where: { id: row.order_id } });
+  if (!order) throw notFound('Order not found.');
+  const returnRemaining = row.refundable_amount - row.shipping_fee - alreadyRefunded;
+  const orderRemaining = Math.max(0, order.total - order.refundedTotal);
+  const maxRefund = Math.min(returnRemaining, orderRemaining);
   if (input.amount > maxRefund) {
     throw badRequest(`Cannot refund more than the remaining eligible amount (${maxRefund}).`);
   }
@@ -262,25 +266,22 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
   );
 
   // Update order refundedTotal and paymentStatus
-  const order = await prisma.order.findUnique({ where: { id: row.order_id } });
-  if (order) {
-    const newRefundedTotal = order.refundedTotal + input.amount;
-    const newPaymentStatus = newRefundedTotal >= order.total ? 'refunded' : 'partially_refunded';
-    await prisma.order.update({
-      where: { id: row.order_id },
-      data: {
-        refundedTotal: newRefundedTotal,
-        paymentStatus: newPaymentStatus,
-        events: {
-          create: [{
-            type: 'refund',
-            message: `Refund of ${input.amount} ${order.currency} for return ${row.reference}. Method: ${input.method}.${input.reference ? ' Ref: ' + input.reference : ''}`,
-            actor: 'admin',
-          }],
-        },
+  const newRefundedTotal = order.refundedTotal + input.amount;
+  const newPaymentStatus = newRefundedTotal >= order.total ? 'refunded' : 'partially_refunded';
+  await prisma.order.update({
+    where: { id: row.order_id },
+    data: {
+      refundedTotal: newRefundedTotal,
+      paymentStatus: newPaymentStatus,
+      events: {
+        create: [{
+          type: 'refund',
+          message: `Refund of ${input.amount} ${order.currency} for return ${row.reference}. Method: ${input.method}.${input.reference ? ' Ref: ' + input.reference : ''}`,
+          actor: 'admin',
+        }],
       },
-    });
-  }
+    },
+  });
 
   // Mark return as refunded
   await prisma.$executeRawUnsafe(
