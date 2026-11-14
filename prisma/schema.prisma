@@ -47,8 +47,12 @@ model Media {
   height    Int?
   altEn     String   @default("") @db.Text
   altHi     String   @default("") @db.Text
-  /// Raw file bytes (SVG/PNG/JPEG/WebP).
-  data      Bytes
+  /// Raw file bytes — null when the asset is stored on Cloudinary.
+  data            Bytes?
+  /// Cloudinary secure_url — set for assets uploaded after Cloudinary was wired in.
+  cloudinaryUrl   String?  @db.Text
+  /// Cloudinary public_id — needed to delete/transform the asset.
+  cloudinaryId    String?
   source    String   @default("seed") // 'seed' | 'upload'
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

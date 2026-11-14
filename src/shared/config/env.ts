@@ -45,6 +45,11 @@ const schema = z.object({
   SMTP_PASSWORD: z.string().optional(),
   SMTP_FROM: z.string().default('"Your Store" <no-reply@yourstore.example>'),
 
+  // --- Cloudinary (image CDN) -----------------------------------------------------------------------
+  CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  CLOUDINARY_API_KEY: z.string().optional(),
+  CLOUDINARY_API_SECRET: z.string().optional(),
+
   // --- Payments ------------------------------------------------------------------------------------
   // Cash-on-delivery always works with no configuration. Card/UPI/wallet require a real gateway;
   // without one configured, checkout rejects those methods with the exact env vars needed to enable
@@ -82,6 +87,10 @@ export const env = {
 
 /** Absolute, restart-stable URL for a stored image. Both apps embed this. */
 export const mediaUrl = (id: string) => `${env.PUBLIC_API_URL.replace(/\/$/, '')}/media/${id}`;
+
+export const isCloudinaryConfigured = Boolean(
+  env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET,
+);
 
 export const isSmtpConfigured = Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASSWORD);
 

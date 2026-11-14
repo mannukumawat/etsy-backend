@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { route } from '../../shared/http/async-route.js';
-import { getMediaBytes } from './media.service.js';
+import { getMediaBytes, getCloudinaryUrl } from './media.service.js';
 
 export const mediaRouter = Router();
 
@@ -14,12 +14,19 @@ mediaRouter.get(
   route(async (req, res) => {
     const row = await getMediaBytes(req.params.id, Boolean(req.owner));
 
+    const cdnUrl = getCloudinaryUrl(row);
+    if (cdnUrl) {
+      res.redirect(301, cdnUrl);
+      return;
+    }
+
     res.setHeader('Content-Type', row.mimeType);
     // An uploaded SVG opened directly (not via <img>) is a document on this API's origin, where a script
     // inside it could read the readable CSRF cookie and make credentialed calls. Scripts never run inside
     // <img>, so this changes nothing for normal rendering; it only neuters the direct-open case.
     res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
     res.setHeader('Cache-Control', req.owner ? 'private, no-store' : 'public, max-age=31536000, immutable');
+    if (!row.data) { res.status(404).end(); return; }
     res.setHeader('Content-Length', String(row.data.length));
     res.send(Buffer.from(row.data));
   }),

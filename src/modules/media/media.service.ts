@@ -1,8 +1,19 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { v2 as cloudinary } from 'cloudinary';
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, notFound } from '../../shared/errors/http-error.js';
+import { env, isCloudinaryConfigured } from '../../shared/config/env.js';
 import type { MediaUploadInput, MediaUrlImportInput } from './media.schema.js';
+
+if (isCloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: env.CLOUDINARY_CLOUD_NAME,
+    api_key: env.CLOUDINARY_API_KEY,
+    api_secret: env.CLOUDINARY_API_SECRET,
+    secure: true,
+  });
+}
 
 // Images live in the database and are served from a stable URL, so both apps keep working after a
 // restart (no blob: URLs, no local file paths, no CDN dependency yet).
@@ -10,7 +21,7 @@ import type { MediaUploadInput, MediaUrlImportInput } from './media.schema.js';
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
-const METADATA_SELECT = { id: true, fileName: true, mimeType: true, sizeBytes: true, width: true, height: true, altEn: true, altHi: true, source: true, createdAt: true } as const;
+const METADATA_SELECT = { id: true, fileName: true, mimeType: true, sizeBytes: true, width: true, height: true, altEn: true, altHi: true, source: true, createdAt: true, cloudinaryUrl: true, cloudinaryId: true } as const;
 
 function isPrivateAddress(address: string): boolean {
   if (isIP(address) === 4) {
@@ -103,6 +114,11 @@ export async function getMediaBytes(id: string, viewerIsOwner: boolean) {
   return row;
 }
 
+/** Returns Cloudinary URL if asset is on Cloudinary, else null (fall back to byte-serving). */
+export function getCloudinaryUrl(row: { cloudinaryUrl: string | null }): string | null {
+  return row.cloudinaryUrl ?? null;
+}
+
 /** Owner only: list metadata (never the bytes). `q` is already trimmed. */
 export function listMedia(q: string) {
   return prisma.media.findMany({
@@ -118,9 +134,25 @@ export async function uploadMedia(input: MediaUploadInput) {
   if (!data.length) throw badRequest('The uploaded file is empty.');
   if (data.length > MAX_BYTES) throw badRequest('Images must be 5 MB or smaller.');
 
+  const id = `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  let cloudinaryUrl: string | null = null;
+  let cloudinaryId: string | null = null;
+
+  if (isCloudinaryConfigured) {
+    const dataUri = `data:${input.mimeType};base64,${input.base64}`;
+    const result = await cloudinary.uploader.upload(dataUri, {
+      public_id: id,
+      folder: 'etcy',
+      resource_type: 'image',
+    });
+    cloudinaryUrl = result.secure_url;
+    cloudinaryId = result.public_id;
+  }
+
   return prisma.media.create({
     data: {
-      id: `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      id,
       fileName: input.fileName,
       mimeType: input.mimeType,
       sizeBytes: data.length,
@@ -128,7 +160,9 @@ export async function uploadMedia(input: MediaUploadInput) {
       height: input.height,
       altEn: input.alt.en,
       altHi: input.alt.hi,
-      data,
+      data: cloudinaryUrl ? null : data,
+      cloudinaryUrl,
+      cloudinaryId,
       source: 'upload',
     },
     select: METADATA_SELECT,
@@ -137,9 +171,24 @@ export async function uploadMedia(input: MediaUploadInput) {
 
 export async function importMediaFromUrl(input: MediaUrlImportInput) {
   const image = await downloadImage(input.url);
+  const id = `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  let cloudinaryUrl: string | null = null;
+  let cloudinaryId: string | null = null;
+
+  if (isCloudinaryConfigured) {
+    const result = await cloudinary.uploader.upload(input.url, {
+      public_id: id,
+      folder: 'etcy',
+      resource_type: 'image',
+    });
+    cloudinaryUrl = result.secure_url;
+    cloudinaryId = result.public_id;
+  }
+
   return prisma.media.create({
     data: {
-      id: `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      id,
       fileName: image.fileName,
       mimeType: image.mimeType,
       sizeBytes: image.data.length,
@@ -147,8 +196,11 @@ export async function importMediaFromUrl(input: MediaUrlImportInput) {
       height: null,
       altEn: input.alt.en,
       altHi: input.alt.hi,
-      data: image.data,
+      data: cloudinaryUrl ? null : image.data,
+      cloudinaryUrl,
+      cloudinaryId,
       source: 'upload',
     },
+    select: METADATA_SELECT,
   });
 }
