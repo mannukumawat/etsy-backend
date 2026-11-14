@@ -1,4 +1,4 @@
-import { prisma } from '../src/db.js';
+import { prisma } from '../src/shared/database/prisma.js';
 
 async function run() {
   await prisma.inventoryAdjustment.deleteMany();

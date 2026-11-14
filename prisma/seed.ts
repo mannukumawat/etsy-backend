@@ -6,7 +6,7 @@ import { PRODUCT_SOURCES as BASE_PRODUCT_SOURCES, type ProductSource } from './c
 import { EXTRA_CATEGORY_SOURCES, EXTRA_PRODUCT_SOURCES } from './extraCatalog.js';
 
 const PRODUCT_SOURCES: ProductSource[] = [...BASE_PRODUCT_SOURCES, ...EXTRA_PRODUCT_SOURCES];
-import { COUNTRIES, SHIPPING_ZONES, ZONE_NAME, type ShippingZoneId } from '../src/countries.js';
+import { COUNTRIES, SHIPPING_ZONES, ZONE_NAME, type ShippingZoneId } from './countries.js';
 
 // Idempotent development seed: safe to run repeatedly. Everything is upserted by a stable id, so
 // re-running never duplicates rows and never clobbers edits made through the admin after seeding

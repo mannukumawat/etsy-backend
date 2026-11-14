@@ -2,40 +2,59 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
-import { attachOwner } from './auth.js';
-import { requireCsrf } from './csrf.js';
-import { attachCustomer } from './customerAuth.js';
-import { assertDatabaseReachable } from './db.js';
-import { env } from './env.js';
-import { errorHandler, notFound, route } from './http.js';
-import { publicApiLimiter } from './rateLimit.js';
-import { adminRouter } from './routes/admin.js';
-import { contentRouter, publicContentRouter } from './routes/content.js';
-import { adminCustomersRouter } from './routes/adminCustomers.js';
-import { adminDashboardRouter } from './routes/adminDashboard.js';
-import { adminOrdersRouter } from './routes/adminOrders.js';
-import { checkoutRouter, orderTrackRouter } from './routes/checkout.js';
-import { collectionsRouter, publicCollectionsRouter } from './routes/collections.js';
-import { couponsRouter } from './routes/coupons.js';
-import { navLinksRouter, publicNavLinksRouter } from './routes/nav.js';
-import { itemGroupsRouter, publicItemGroupsRouter } from './routes/itemGroups.js';
-import { customerAuthRouter, customerRouter } from './routes/customers.js';
-import { inventoryRouter } from './routes/inventory.js';
-import { adminMediaRouter, mediaRouter } from './routes/media.js';
-import { publicRouter } from './routes/public.js';
-import { adminReviewsRouter, customerReviewsRouter, publicReviewsRouter } from './routes/reviews.js';
-import { adminReturnsRouter } from './routes/adminReturns.js';
-import { adminContactsRouter } from './routes/adminContacts.js';
-import { adminHelpRouter, publicHelpRouter } from './routes/help.js';
-import { importExportRouter } from './routes/importExport.js';
-import { customerCancelRouter, customerReturnsRouter } from './routes/returns.js';
-import { customerExchangesRouter } from './routes/exchanges.js';
-import { customerBankAccountsRouter } from './routes/bankAccounts.js';
-import { adminExchangesRouter } from './routes/adminExchanges.js';
-import { translationsRouter } from './routes/translations.js';
-import { uiI18nAdminRouter, uiI18nPublicRouter } from './routes/uiI18n.js';
-import { stripHindiResponses, translateResponses } from './translations.js';
-import { publicSettingsRouter, settingsRouter } from './routes/settings.js';
+import { attachOwner, requireOwner } from './shared/middleware/auth.middleware.js';
+import { requireCsrf } from './shared/middleware/csrf.middleware.js';
+import { attachCustomer } from './shared/middleware/customer-auth.middleware.js';
+import { assertDatabaseReachable } from './shared/database/prisma.js';
+import { env } from './shared/config/env.js';
+import { errorHandler } from './shared/http/error-handler.js';
+import { notFound } from './shared/errors/http-error.js';
+import { route } from './shared/http/async-route.js';
+import { publicApiLimiter } from './shared/middleware/rate-limit.middleware.js';
+import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes.js';
+import { categoryRouter } from './modules/categories/category.routes.js';
+import { productRouter } from './modules/products/product.routes.js';
+import { contentRouter } from './modules/content/admin-content.routes.js';
+import { publicContentRouter } from './modules/content/content.routes.js';
+import { adminCustomersRouter } from './modules/customers/admin-customer.routes.js';
+import { adminDashboardRouter } from './modules/dashboard/dashboard.routes.js';
+import { adminOrdersRouter } from './modules/orders/admin-order.routes.js';
+import { checkoutRouter } from './modules/checkout/checkout.routes.js';
+import { orderTrackRouter } from './modules/orders/order.routes.js';
+import { collectionsRouter } from './modules/collections/admin-collection.routes.js';
+import { publicCollectionsRouter } from './modules/collections/collection.routes.js';
+import { couponsRouter } from './modules/coupons/coupon.routes.js';
+import { navLinksRouter } from './modules/navigation/admin-nav.routes.js';
+import { publicNavLinksRouter } from './modules/navigation/nav.routes.js';
+import { itemGroupsRouter } from './modules/item-groups/admin-item-group.routes.js';
+import { publicItemGroupsRouter } from './modules/item-groups/item-group.routes.js';
+import { customerAuthRouter } from './modules/customers/customer-auth.routes.js';
+import { customerRouter } from './modules/customers/customer.routes.js';
+import { inventoryRouter } from './modules/inventory/inventory.routes.js';
+import { adminMediaRouter } from './modules/media/admin-media.routes.js';
+import { mediaRouter } from './modules/media/media.routes.js';
+import { storefrontCategoryRouter } from './modules/categories/storefront-category.routes.js';
+import { storefrontProductRouter } from './modules/products/storefront-product.routes.js';
+import { contactRouter } from './modules/contacts/contact.routes.js';
+import { publicReviewsRouter } from './modules/reviews/review.routes.js';
+import { customerReviewsRouter } from './modules/reviews/customer-review.routes.js';
+import { adminReviewsRouter } from './modules/reviews/admin-review.routes.js';
+import { adminReturnsRouter } from './modules/returns/admin-return.routes.js';
+import { adminContactsRouter } from './modules/contacts/admin-contact.routes.js';
+import { adminHelpRouter } from './modules/help/admin-help.routes.js';
+import { publicHelpRouter } from './modules/help/help.routes.js';
+import { importExportRouter } from './modules/import-export/import-export.routes.js';
+import { customerCancelRouter } from './modules/returns/customer-cancel.routes.js';
+import { customerReturnsRouter } from './modules/returns/customer-return.routes.js';
+import { customerExchangesRouter } from './modules/exchanges/customer-exchange.routes.js';
+import { customerBankAccountsRouter } from './modules/bank-accounts/bank-account.routes.js';
+import { adminExchangesRouter } from './modules/exchanges/admin-exchange.routes.js';
+import { translationsRouter } from './modules/translations/translation.routes.js';
+import { uiI18nAdminRouter } from './modules/ui-i18n/admin-ui-i18n.routes.js';
+import { uiI18nPublicRouter } from './modules/ui-i18n/ui-i18n.routes.js';
+import { stripHindiResponses, translateResponses } from './modules/translations/translation.middleware.js';
+import { settingsRouter } from './modules/settings/admin-settings.routes.js';
+import { publicSettingsRouter } from './modules/settings/settings.routes.js';
 
 export function createApp() {
   const app = express();
@@ -93,10 +112,14 @@ export function createApp() {
   );
 
   app.use('/media', mediaRouter);
-  // Auth routes must run before the generic owner-only /api/admin routers below. In particular,
-  // importExportRouter installs requireOwner at router level and would otherwise reject /auth/login
-  // before adminRouter gets a chance to handle it.
-  app.use('/api/admin', adminRouter);
+  // Owner login/logout/me must be mounted before the owner gate below. In particular, importExportRouter
+  // installs requireOwner at router level and would otherwise reject /auth/login.
+  app.use('/api/admin/auth', adminAuthRouter);
+  // Everything under /api/admin from here on requires a valid owner session — including paths no router
+  // below handles (those answer 401, not 404, to anonymous callers).
+  app.use('/api/admin', requireOwner);
+  app.use('/api/admin/categories', categoryRouter);
+  app.use('/api/admin/products', productRouter);
   app.use('/api/admin/media', adminMediaRouter);
   app.use('/api/admin/settings', settingsRouter);
   app.use('/api/admin/inventory', inventoryRouter);
@@ -133,7 +156,9 @@ export function createApp() {
   app.use('/api/item-groups', publicItemGroupsRouter);
   app.use('/api/collections', publicCollectionsRouter);
   app.use('/api', publicReviewsRouter);
-  app.use('/api', publicRouter);
+  app.use('/api', storefrontCategoryRouter);
+  app.use('/api', storefrontProductRouter);
+  app.use('/api', contactRouter);
 
   app.use((_req, _res, next) => next(notFound('No such endpoint.')));
   app.use(errorHandler);

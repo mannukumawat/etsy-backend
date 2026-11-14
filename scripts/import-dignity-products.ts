@@ -4,7 +4,7 @@
  * INR → USD: 1 USD = 84 INR
  */
 import { createRequire } from 'node:module';
-import { prisma } from '../src/db.js';
+import { prisma } from '../src/shared/database/prisma.js';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports

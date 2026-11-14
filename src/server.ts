@@ -1,7 +1,7 @@
 import { createApp } from './app.js';
-import { assertDatabaseReachable, prisma } from './db.js';
-import { env } from './env.js';
-import { startRateScheduler } from './exchangeRates.js';
+import { assertDatabaseReachable, prisma } from './shared/database/prisma.js';
+import { env } from './shared/config/env.js';
+import { startRateScheduler } from './modules/settings/exchange-rate.service.js';
 
 async function main() {
   try {
