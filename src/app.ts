@@ -48,6 +48,7 @@ import { customerCancelRouter } from './modules/returns/customer-cancel.routes.j
 import { customerReturnsRouter } from './modules/returns/customer-return.routes.js';
 import { customerExchangesRouter } from './modules/exchanges/customer-exchange.routes.js';
 import { customerBankAccountsRouter } from './modules/bank-accounts/bank-account.routes.js';
+import { customerUpiRouter } from './modules/bank-accounts/upi.routes.js';
 import { adminExchangesRouter } from './modules/exchanges/admin-exchange.routes.js';
 import { translationsRouter } from './modules/translations/translation.routes.js';
 import { uiI18nAdminRouter } from './modules/ui-i18n/admin-ui-i18n.routes.js';
@@ -147,6 +148,7 @@ export function createApp() {
   app.use('/api/customer/returns', customerReturnsRouter);
   app.use('/api/customer/exchanges', customerExchangesRouter);
   app.use('/api/customer/bank-accounts', customerBankAccountsRouter);
+  app.use('/api/customer/upi-ids', customerUpiRouter);
   app.use('/api/customer/orders', customerCancelRouter);
   app.use('/api/customer', customerRouter);
   app.use('/api/checkout', checkoutRouter);

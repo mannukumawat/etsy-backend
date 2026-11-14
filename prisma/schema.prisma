@@ -465,6 +465,19 @@ model Customer {
   passwordHash String
   name         String
   phone        String   @default("")
+  avatarUrl    String?
+  gender       String?
+  languages    String?
+  occupation   String?
+  pincode      String?
+  city         String?
+  state        String?
+  dateOfBirth  String?
+  maritalStatus String?
+  numberOfKids  String?
+  education    String?
+  monthlyIncome String?
+  deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

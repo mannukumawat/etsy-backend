@@ -37,6 +37,14 @@ export function clearCustomerSession(res: Response) {
 export async function verifyCustomerCredentials(email: string, password: string) {
   const customer = await prisma.customer.findUnique({ where: { email: email.trim().toLowerCase() } });
   if (!customer) return null;
+  // Account in 14-day grace period → reactivate on successful login
+  if (customer.deletedAt && customer.deletedAt > new Date()) {
+    const ok = await bcrypt.compare(password, customer.passwordHash);
+    if (!ok) return null;
+    return prisma.customer.update({ where: { id: customer.id }, data: { deletedAt: null } });
+  }
+  // Past grace period → permanently inaccessible
+  if (customer.deletedAt) return null;
   const ok = await bcrypt.compare(password, customer.passwordHash);
   return ok ? customer : null;
 }

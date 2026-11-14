@@ -49,8 +49,8 @@ export async function requireCustomer(req: Request, _res: Response, next: NextFu
   try {
     const claims = req.customer ?? readClaims(req);
     if (!claims) throw unauthorized('Sign in to your account to continue.');
-    const customer = await prisma.customer.findUnique({ where: { id: claims.sub }, select: { id: true, email: true, name: true } });
-    if (!customer) throw unauthorized('This account no longer exists.');
+    const customer = await prisma.customer.findUnique({ where: { id: claims.sub }, select: { id: true, email: true, name: true, deletedAt: true } });
+    if (!customer || customer.deletedAt !== null) throw unauthorized('This account is scheduled for deletion. Sign in to reactivate it.');
     req.customer = { sub: customer.id, email: customer.email, name: customer.name };
     next();
   } catch (e) {

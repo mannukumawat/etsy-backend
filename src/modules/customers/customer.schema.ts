@@ -25,10 +25,24 @@ export type CustomerRegisterInput = z.infer<typeof customerRegisterSchema>;
 
 export const customerLoginSchema = z.object({ email: customerEmailField, password: z.string().min(1, 'Password is required.') });
 
+const optStr = z.string().trim().max(200).optional();
+
 export const customerProfileSchema = z.object({
   name: z.string().trim().min(2, 'Enter your full name.').max(80),
   email: customerEmailField,
   phone: customerPhoneField,
+  avatarUrl: z.string().trim().max(500_000).optional(),
+  gender: optStr,
+  languages: optStr,
+  occupation: optStr,
+  pincode: optStr,
+  city: optStr,
+  state: optStr,
+  dateOfBirth: optStr,
+  maritalStatus: optStr,
+  numberOfKids: optStr,
+  education: optStr,
+  monthlyIncome: optStr,
 });
 export type CustomerProfileInput = z.infer<typeof customerProfileSchema>;
 

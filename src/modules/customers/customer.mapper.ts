@@ -1,5 +1,26 @@
-export function toCustomerPublic(c: { id: string; name: string; email: string; phone: string; createdAt: Date }) {
-  return { id: c.id, name: c.name, email: c.email, phone: c.phone || undefined, createdAt: c.createdAt.toISOString(), isDemoAccount: false };
+export function toCustomerPublic(c: {
+  id: string; name: string; email: string; phone: string; createdAt: Date;
+  avatarUrl?: string | null; gender?: string | null; languages?: string | null;
+  occupation?: string | null; pincode?: string | null; city?: string | null; state?: string | null;
+  dateOfBirth?: string | null; maritalStatus?: string | null; numberOfKids?: string | null;
+  education?: string | null; monthlyIncome?: string | null;
+}) {
+  return {
+    id: c.id, name: c.name, email: c.email, phone: c.phone || undefined,
+    createdAt: c.createdAt.toISOString(), isDemoAccount: false,
+    avatarUrl: c.avatarUrl || undefined,
+    gender: c.gender || undefined,
+    languages: c.languages || undefined,
+    occupation: c.occupation || undefined,
+    pincode: c.pincode || undefined,
+    city: c.city || undefined,
+    state: c.state || undefined,
+    dateOfBirth: c.dateOfBirth || undefined,
+    maritalStatus: c.maritalStatus || undefined,
+    numberOfKids: c.numberOfKids || undefined,
+    education: c.education || undefined,
+    monthlyIncome: c.monthlyIncome || undefined,
+  };
 }
 
 /** admin/src/types Customer shape (distinct from the storefront's User: `phone` is nullable rather

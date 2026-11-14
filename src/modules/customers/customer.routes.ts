@@ -92,6 +92,20 @@ customerRouter.delete(
   }),
 );
 
+// --- account deletion (soft delete only — data is never purged) -----------------------------------
+
+customerRouter.delete(
+  '/account',
+  route(async (req, res) => {
+    const scheduledAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days grace
+    await prisma.customer.update({
+      where: { id: req.customer!.sub },
+      data: { deletedAt: scheduledAt },
+    });
+    res.json({ ok: true });
+  }),
+);
+
 // --- order history (private: only the signed-in customer's own orders) ---------------------------
 
 customerRouter.get(

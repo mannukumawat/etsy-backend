@@ -11,7 +11,26 @@ export async function updateCustomerProfile(customerId: string, input: CustomerP
   const email = input.email.trim().toLowerCase();
   const other = await prisma.customer.findUnique({ where: { email } });
   if (other && other.id !== customerId) throw conflict('An account with this email already exists.', [{ path: 'email', message: 'Already registered.' }]);
-  return prisma.customer.update({ where: { id: customerId }, data: { name: input.name.trim(), email, phone: input.phone } });
+  return prisma.customer.update({
+    where: { id: customerId },
+    data: {
+      name: input.name.trim(),
+      email,
+      phone: input.phone,
+      avatarUrl: input.avatarUrl,
+      gender: input.gender,
+      languages: input.languages,
+      occupation: input.occupation,
+      pincode: input.pincode,
+      city: input.city,
+      state: input.state,
+      dateOfBirth: input.dateOfBirth,
+      maritalStatus: input.maritalStatus,
+      numberOfKids: input.numberOfKids,
+      education: input.education,
+      monthlyIncome: input.monthlyIncome,
+    },
+  });
 }
 
 // --- addresses ------------------------------------------------------------------------------------
