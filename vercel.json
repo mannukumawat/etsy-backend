@@ -13,7 +13,7 @@
     },
     {
       "path": "/api/notifications/cron/push-flush",
-      "schedule": "* * * * *"
+      "schedule": "0 4 * * *"
     }
   ],
   "routes": [
