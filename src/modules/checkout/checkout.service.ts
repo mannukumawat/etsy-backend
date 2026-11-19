@@ -4,8 +4,9 @@ import { badRequest } from '../../shared/errors/http-error.js';
 import { convertFromBase } from '../../shared/utils/currency.js';
 import { evaluateCoupon, type CartLineForCoupon } from '../coupons/coupon-rules.service.js';
 import type { CheckoutTotalsInput, ValidateCouponInput } from './checkout.schema.js';
-import type { Buyer, ResolvedLine, StockIssue } from './checkout.types.js';
+import type { Buyer, ResolvedLine, StockIssue, WalletPreviewInfo } from './checkout.types.js';
 import { calculateTotals, getShippingQuote, getShippingQuotes, getTaxRate } from './pricing.service.js';
+import { getBalance } from '../wallet/wallet.service.js';
 
 // Server-calculated checkout: the client never computes a total that is trusted. Both /totals (a
 // preview, no side effects) and /orders (places a real order) run the exact same pricing pipeline in
@@ -107,7 +108,7 @@ export async function computePreview(input: CheckoutTotalsInput, customerKey: st
     }
   }
 
-  const taxRate = getTaxRate(context.taxRules, context.defaultTaxRate, input.country, null);
+  const taxRate = getTaxRate(context.taxRules, context.defaultTaxRate, input.country, input.region ?? null);
   const totals = calculateTotals({
     lineTotals: resolved.map((l) => l.lineTotalConverted),
     discount,
@@ -123,6 +124,20 @@ export async function computePreview(input: CheckoutTotalsInput, customerKey: st
 export async function previewCheckoutTotals(input: CheckoutTotalsInput, buyer: Buyer) {
   const { resolved, stockIssues, quote, quotes, taxRate, totals, couponError } = await computePreview(input, customerKeyFor(buyer));
 
+  // Include wallet balance for signed-in customers so the checkout UI can show the wallet option.
+  let wallet: WalletPreviewInfo | null = null;
+  if (buyer.customerId) {
+    const balancePaise = await getBalance(buyer.customerId);
+    if (balancePaise > 0) {
+      // totals.total is in minor units (paise for INR); wallet is INR paise only.
+      const totalPaise = input.currency === 'INR' ? totals.total : 0;
+      wallet = {
+        balancePaise,
+        maxApplicablePaise: totalPaise > 0 ? Math.min(balancePaise, totalPaise) : 0,
+      };
+    }
+  }
+
   return {
     lines: resolved.map((l) => ({ productId: l.productId, variantId: l.variantId, quantity: l.quantity, unitPrice: l.unitPriceConverted, lineTotal: l.lineTotalConverted })),
     shippingQuotes: quotes,
@@ -132,6 +147,7 @@ export async function previewCheckoutTotals(input: CheckoutTotalsInput, buyer: B
     couponError,
     stockIssues,
     totals,
+    wallet,
   };
 }
 

@@ -7,6 +7,13 @@ export interface Buyer {
   email: string;
 }
 
+/** Wallet info included in the checkout totals preview for signed-in customers. */
+export interface WalletPreviewInfo {
+  balancePaise: number;
+  /** Largest amount the customer can pay from their wallet for this specific order (min of balance and order total). */
+  maxApplicablePaise: number;
+}
+
 export interface ResolvedLine {
   productId: string;
   variantId: string;

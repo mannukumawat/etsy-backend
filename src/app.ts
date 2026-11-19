@@ -56,6 +56,12 @@ import { uiI18nPublicRouter } from './modules/ui-i18n/ui-i18n.routes.js';
 import { stripHindiResponses, translateResponses } from './modules/translations/translation.middleware.js';
 import { settingsRouter } from './modules/settings/admin-settings.routes.js';
 import { publicSettingsRouter } from './modules/settings/settings.routes.js';
+import { customerNotificationsRouter } from './modules/notifications/notification.routes.js';
+import { adminNotificationsRouter } from './modules/notifications/admin-notification.routes.js';
+import { cronNotificationsRouter } from './modules/notifications/cron-notification.routes.js';
+import { walletRouter } from './modules/wallet/wallet.routes.js';
+import { adminWalletRouter } from './modules/wallet/admin-wallet.routes.js';
+import { handleWalletRazorpayWebhook } from './modules/wallet/webhook.handler.js';
 
 export function createApp() {
   const app = express();
@@ -93,6 +99,10 @@ export function createApp() {
       credentials: true,
     }),
   );
+  // Raw-body webhooks MUST be mounted before express.json() — once express.json() runs the Buffer
+  // is gone and signature verification against the raw body is impossible.
+  app.post('/api/webhooks/wallet/razorpay', express.raw({ type: 'application/json' }), route(handleWalletRazorpayWebhook));
+
   // Image uploads arrive as base64 JSON, so allow a larger body than the default 100kb.
   app.use(express.json({ limit: '12mb' }));
   app.use(cookieParser());
@@ -101,6 +111,7 @@ export function createApp() {
   // After attachOwner/attachCustomer (needs req.owner/req.customer) and before every router.
   app.use(requireCsrf);
   app.use('/api', publicApiLimiter);
+
   app.use(stripHindiResponses);
   app.use(translateResponses);
 
@@ -116,6 +127,7 @@ export function createApp() {
   // Owner login/logout/me must be mounted before the owner gate below. In particular, importExportRouter
   // installs requireOwner at router level and would otherwise reject /auth/login.
   app.use('/api/admin/auth', adminAuthRouter);
+  app.use('/api/notifications/cron', cronNotificationsRouter);
   // Everything under /api/admin from here on requires a valid owner session — including paths no router
   // below handles (those answer 401, not 404, to anonymous callers).
   app.use('/api/admin', requireOwner);
@@ -134,6 +146,8 @@ export function createApp() {
   app.use('/api/admin/collections', collectionsRouter);
   app.use('/api/admin/reviews', adminReviewsRouter);
   app.use('/api/admin/returns', adminReturnsRouter);
+  app.use('/api/admin/notifications', adminNotificationsRouter);
+  app.use('/api/admin/wallet', adminWalletRouter);
   app.use('/api/admin/exchanges', adminExchangesRouter);
   app.use('/api/admin/contacts', adminContactsRouter);
   app.use('/api/admin/help', adminHelpRouter);
@@ -147,6 +161,8 @@ export function createApp() {
   app.use('/api/customer/reviews', customerReviewsRouter);
   app.use('/api/customer/returns', customerReturnsRouter);
   app.use('/api/customer/exchanges', customerExchangesRouter);
+  app.use('/api/customer/notifications', customerNotificationsRouter);
+  app.use('/api/customer/wallet', walletRouter);
   app.use('/api/customer/bank-accounts', customerBankAccountsRouter);
   app.use('/api/customer/upi-ids', customerUpiRouter);
   app.use('/api/customer/orders', customerCancelRouter);

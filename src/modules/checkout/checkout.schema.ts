@@ -22,12 +22,14 @@ export const checkoutTotalsSchema = z.object({
   lines: z.array(checkoutLineSchema).min(1, 'Your cart is empty.').max(50),
   currency: z.enum(SUPPORTED_CURRENCY_CODES),
   country: z.string().length(2, 'Choose a destination country.'),
+  /** Optional shipping-address region/state for regional tax rule matching. */
+  region: z.string().trim().max(80).optional(),
   shippingMethodId: z.enum(['standard', 'express']),
   couponCode: z.string().trim().max(30).optional(),
 });
 export type CheckoutTotalsInput = z.infer<typeof checkoutTotalsSchema>;
 
-export const PAYMENT_METHODS = ['cod', 'card', 'upi', 'wallet'] as const;
+export const PAYMENT_METHODS = ['card', 'upi', 'wallet'] as const;
 
 export const placeOrderSchema = z.object({
   idempotencyKey: z.string().trim().min(1, 'Missing idempotency key.').max(100),
@@ -38,5 +40,15 @@ export const placeOrderSchema = z.object({
   shippingMethodId: z.enum(['standard', 'express']),
   paymentMethod: z.enum(PAYMENT_METHODS),
   couponCode: z.string().trim().max(30).optional(),
+  /** Razorpay payment details — required for card/upi/wallet (Razorpay). */
+  razorpayOrderId: z.string().optional(),
+  razorpayPaymentId: z.string().optional(),
+  razorpaySignature: z.string().optional(),
+  /**
+   * Amount in INR paise to pay from the customer's store wallet.
+   * 0 or absent = no wallet payment. Must equal the full order total (partial not supported).
+   * When set to the full order total, no Razorpay order is required and paymentMethod should be 'wallet'.
+   */
+  walletAmountPaise: z.number().int().min(0).optional(),
 });
 export type PlaceOrderInput = z.infer<typeof placeOrderSchema>;

@@ -485,11 +485,16 @@ model Customer {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  addresses     CustomerAddress[]
-  wishlistItems WishlistItem[]
-  resetTokens   PasswordResetToken[]
-  orders        Order[]
-  reviews       Review[]
+  addresses          CustomerAddress[]
+  wishlistItems      WishlistItem[]
+  resetTokens        PasswordResetToken[]
+  orders             Order[]
+  reviews            Review[]
+  fcmTokens          FcmToken[]
+  notificationRecords NotificationRecord[]
+  walletBalance      WalletBalance?
+  walletTransactions WalletTransaction[]
+  walletTopups       WalletTopup[]
 
   @@map("customers")
 }
@@ -844,6 +849,131 @@ model ContactMessage {
 
   @@index([status, createdAt])
   @@map("contact_messages")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Firebase push tokens — one row per registered device/browser.
+// ---------------------------------------------------------------------------------------------
+
+model FcmToken {
+  id         String   @id @default(cuid())
+  customerId String
+  token      String   @unique @db.VarChar(512)
+  /// Short UA snippet (browser + OS) for display in admin token list.
+  deviceInfo String   @default("") @db.VarChar(255)
+  lastSeen   DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("fcm_tokens")
+}
+
+/// Persistent in-app notification inbox record. Created for both owner ('owner') and customers.
+model NotificationRecord {
+  id          String    @id @default(cuid())
+  /// 'owner' or a customer id.
+  recipientId String    @db.VarChar(191)
+  /// 'customer' | 'owner'
+  kind        String    @db.VarChar(20)
+  /// Event type key e.g. 'order.placed', 'wallet.topped_up'.
+  event       String    @db.VarChar(100)
+  title       String    @db.VarChar(255)
+  body        String    @db.Text
+  /// Relative path for deep link, e.g. '/account/orders/abc'.
+  link        String    @default("") @db.VarChar(512)
+  readAt      DateTime?
+  /// 'pending' | 'sent' | 'failed' | 'skipped'
+  pushStatus  String    @default("pending") @db.VarChar(20)
+  pushSentAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// Set only for kind='customer' notifications; null for kind='owner'.
+  customerId String?   @db.VarChar(191)
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt])
+  @@index([event])
+  @@map("notification_records")
+}
+
+/// Log of admin-initiated broadcast or targeted sends.
+model NotificationSend {
+  id            String   @id @default(cuid())
+  /// Always 'owner' for now.
+  senderId      String   @db.VarChar(191)
+  /// 'one' | 'all'
+  recipientType String   @db.VarChar(10)
+  /// Set for 'one' sends; null for broadcast.
+  recipientId   String?  @db.VarChar(191)
+  title         String   @db.VarChar(255)
+  body          String   @db.Text
+  sentAt        DateTime @default(now())
+  successCount  Int      @default(0)
+  failCount     Int      @default(0)
+
+  @@index([sentAt])
+  @@map("notification_sends")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store Wallet — INR-only balance for signed-in customers.
+// ---------------------------------------------------------------------------------------------
+
+/// One row per customer. Created on first top-up or refund credit.
+model WalletBalance {
+  customerId   String   @id
+  /// Balance in INR paise (integer minor units). Never negative.
+  balancePaise Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@map("wallet_balances")
+}
+
+/// Append-only ledger. Every credit and debit gets its own row.
+model WalletTransaction {
+  id           String   @id @default(cuid())
+  customerId   String
+  /// 'topup' | 'spend' | 'refund' | 'reversal'
+  type         String   @db.VarChar(20)
+  /// Positive = credit, negative = debit. Always in INR paise.
+  amountPaise  Int
+  balanceAfter Int
+  /// Idempotency key — unique per business event.
+  reference    String   @unique @db.VarChar(191)
+  /// Linked order id for 'spend' and 'refund' types.
+  orderId      String?  @db.VarChar(191)
+  /// Linked WalletTopup id for 'topup' type.
+  topupId      String?  @db.VarChar(191)
+  note         String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt])
+  @@map("wallet_transactions")
+}
+
+/// Razorpay order created for a wallet top-up. Credited only after verified capture.
+model WalletTopup {
+  id                String    @id @default(cuid())
+  customerId        String
+  /// Amount customer requested to add, in INR paise.
+  amountPaise       Int
+  razorpayOrderId   String    @unique @db.VarChar(255)
+  razorpayPaymentId String?   @db.VarChar(255)
+  /// 'pending' | 'paid' | 'failed'
+  status            String    @default("pending") @db.VarChar(20)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@map("wallet_topups")
 }
 
 // ---------------------------------------------------------------------------------------------

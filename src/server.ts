@@ -2,6 +2,9 @@ import { createApp } from './app.js';
 import { assertDatabaseReachable, prisma } from './shared/database/prisma.js';
 import { env } from './shared/config/env.js';
 import { startRateScheduler } from './modules/settings/exchange-rate.service.js';
+import { registerNotificationEventHandler } from './shared/events/notification-events.js';
+import { handleNotificationEvent } from './modules/notifications/notification.service.js';
+import { startPushWorker } from './modules/notifications/push.worker.js';
 
 async function main() {
   try {
@@ -23,6 +26,10 @@ async function main() {
   });
 
   startRateScheduler();
+
+  // Register the notification event handler (must be after DB is confirmed reachable).
+  registerNotificationEventHandler(handleNotificationEvent);
+  startPushWorker();
 
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down.`);

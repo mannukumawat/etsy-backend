@@ -50,11 +50,3 @@ export type RefundOrderInput = z.infer<typeof refundOrderSchema>;
 export const addNoteSchema = z.object({ body: z.string().trim().min(1, 'Note cannot be empty.').max(1000) });
 export type AddNoteInput = z.infer<typeof addNoteSchema>;
 
-export const codCollectionSchema = z.object({
-  amount: z.number().int().positive(),
-  collectedAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
-  collector: z.string().min(1).max(100),
-  reference: z.string().max(100).optional(),
-  note: z.string().max(500).optional(),
-});
-export type CodCollectionInput = z.infer<typeof codCollectionSchema>;

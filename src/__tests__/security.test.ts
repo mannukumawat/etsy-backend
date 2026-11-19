@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
@@ -169,6 +169,14 @@ describe('security regression: order access control', () => {
     consumed.set(variantId, (consumed.get(variantId) ?? 0) + 1);
   }
 
+  function fakeRazorpayFields() {
+    const razorpayOrderId = `order_test_${randomBytes(8).toString('hex')}`;
+    const razorpayPaymentId = `pay_test_${randomBytes(8).toString('hex')}`;
+    const secret = env.RAZORPAY_KEY_SECRET ?? 'test_secret';
+    const razorpaySignature = createHmac('sha256', secret).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest('hex');
+    return { razorpayOrderId, razorpayPaymentId, razorpaySignature };
+  }
+
   async function placeGuestOrder(email: string) {
     const variant = await pickInStockVariant();
     const res = await request(app)
@@ -180,7 +188,8 @@ describe('security regression: order access control', () => {
         email,
         address: { fullName: 'Test Guest', phoneCountry: 'IN', phone: '9876500000', country: 'IN', line1: '1 Test Rd' },
         shippingMethodId: 'standard',
-        paymentMethod: 'cod',
+        paymentMethod: 'card',
+        ...fakeRazorpayFields(),
       });
     recordOrder(res.status, res.body, variant.id);
     expect(res.status).toBe(201);
@@ -236,7 +245,8 @@ describe('security regression: order access control', () => {
         email: emailA,
         address: { fullName: 'Test A', phoneCountry: 'IN', phone: '9876500001', country: 'IN', line1: '1 A Rd' },
         shippingMethodId: 'standard',
-        paymentMethod: 'cod',
+        paymentMethod: 'card',
+        ...fakeRazorpayFields(),
       });
     recordOrder(placed.status, placed.body, variant.id);
     expect(placed.status).toBe(201);

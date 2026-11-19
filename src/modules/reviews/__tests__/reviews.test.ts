@@ -51,7 +51,7 @@ async function order(customerId: string, productId: string, fulfilmentStatus: st
       shippingMethodLabel: 'Standard',
       shippingMinDays: 3,
       shippingMaxDays: 6,
-      paymentMethod: 'cod',
+      paymentMethod: 'card',
       paymentStatus: 'paid',
       fulfilmentStatus,
       lines: { create: [{ productId, variantId: 'test-variant', sku: 'TEST', nameEn: 'Test line', unitPrice: 1000, quantity: 1, lineTotal: 1000 }] },

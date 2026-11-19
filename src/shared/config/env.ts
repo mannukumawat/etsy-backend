@@ -57,7 +57,22 @@ const schema = z.object({
   PAYMENT_GATEWAY: z.enum(['none', 'razorpay', 'stripe']).default('none'),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
+  // Separate secret configured in Razorpay Dashboard → Webhooks → Secret. NOT the API key secret.
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
+
+  // --- Firebase Admin (push notifications) -------------------------------------------------------
+  // All three are required to send push. Without them, push is skipped and the inbox still works.
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().optional(),
+  FIREBASE_PRIVATE_KEY: z.string().optional(),
+
+  // --- Store Wallet -------------------------------------------------------------------------------
+  // Top-up is disabled in production by default until the merchant confirms provider support.
+  // Set WALLET_TOPUP_ENABLED=true to enable. Amounts in INR paise.
+  WALLET_TOPUP_ENABLED: z.string().default('false'),
+  WALLET_TOPUP_MIN_PAISE: z.coerce.number().int().positive().default(10000),   // ₹100
+  WALLET_TOPUP_MAX_PAISE: z.coerce.number().int().positive().default(1000000), // ₹10000
 });
 
 const parsed = schema.safeParse(process.env);
@@ -93,6 +108,12 @@ export const isCloudinaryConfigured = Boolean(
 );
 
 export const isSmtpConfigured = Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASSWORD);
+
+export const isFirebaseConfigured = Boolean(
+  env.FIREBASE_PROJECT_ID && env.FIREBASE_CLIENT_EMAIL && env.FIREBASE_PRIVATE_KEY,
+);
+
+export const isWalletTopupEnabled = env.WALLET_TOPUP_ENABLED === 'true';
 
 export const isPaymentGatewayConfigured =
   env.PAYMENT_GATEWAY === 'razorpay'

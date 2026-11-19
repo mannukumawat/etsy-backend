@@ -35,7 +35,7 @@ const shippingZoneSchema = z
   .object({
     id: z.string().min(1).optional(),
     name: z.string().trim().min(1, 'Zone name is required.').max(60),
-    countries: z.array(z.string().length(2)).min(1, 'Add at least one country.'),
+    countries: z.array(z.string().length(2).transform((c) => c.toUpperCase())).min(1, 'Add at least one country.'),
     standard: z.object({
       enabled: z.boolean(),
       rate: z.number().int().min(0).max(1_000_000),

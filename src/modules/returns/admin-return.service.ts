@@ -2,6 +2,8 @@ import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, notFound } from '../../shared/errors/http-error.js';
 import { randomHexId } from '../../shared/utils/ids.js';
 import { fetchReturnWithDetails } from './return.repository.js';
+import { creditWallet } from '../wallet/wallet.service.js';
+import { emitNotificationEvent } from '../../shared/events/notification-events.js';
 import type {
   AddReturnNoteInput, ApproveReturnInput, ArrangePickupInput, InspectReturnInput, ProcessReturnRefundInput,
   ReceiveReturnInput, RecordReturnShippingInput, RejectReturnInput,
@@ -253,10 +255,92 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
 
   // Determine completed status for non-manual methods
   const isManual = input.method === 'manual_bank' || input.method === 'manual_upi';
+  const isWalletRefund = input.method === 'store_credit';
   const status = isManual ? 'pending' : 'completed';
   const completedAt = isManual ? null : new Date().toISOString();
 
+  // Idempotency guard: prevent double wallet refund for same return
+  if (isWalletRefund) {
+    const walletRef = `refund:return:${row.id}`;
+    const existingTx = await prisma.walletTransaction.findUnique({ where: { reference: walletRef } });
+    if (existingTx) throw conflict('A wallet refund has already been issued for this return.');
+
+    // Verify customer has a wallet-capable account (must be an account order)
+    if (!order.customerId) throw badRequest('Cannot issue a wallet refund for a guest order.');
+  }
+
   const refundId = randomHexId(12);
+  const newRefundedTotal = order.refundedTotal + input.amount;
+  const newPaymentStatus = newRefundedTotal >= order.total ? 'refunded' : 'partially_refunded';
+
+  if (isWalletRefund) {
+    // Credit wallet atomically in the same transaction as the refund row
+    const walletRef = `refund:return:${row.id}`;
+    let walletTxId!: string;
+    let walletNewBalance!: number;
+
+    await prisma.$transaction(async (tx) => {
+      // Insert refund row as completed immediately
+      await tx.$executeRawUnsafe(
+        `INSERT INTO refunds (id, order_id, return_id, amount, reason, method, status, reference, completed_at, recorded_by, note, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'store_credit', 'completed', ?, NOW(3), ?, ?, NOW(3), NOW(3))`,
+        refundId, row.order_id, row.id, input.amount,
+        `Return ${row.reference}`, walletRef, actor.email, input.note ?? null,
+      );
+
+      // Update order totals — atomic guard against over-refund
+      const updateResult = await tx.order.updateMany({
+        where: {
+          id: row.order_id,
+          // Atomic over-refund guard: refundedTotal + input.amount <= total
+          refundedTotal: { lte: order.total - input.amount },
+        },
+        data: {
+          refundedTotal: newRefundedTotal,
+          paymentStatus: newPaymentStatus,
+        },
+      });
+      if (updateResult.count === 0) {
+        throw conflict('Refund amount would exceed the order total. Possible concurrent refund.');
+      }
+
+      // Credit wallet
+      const result = await creditWallet(order.customerId!, input.amount, 'refund', walletRef, { orderId: order.id, tx });
+      walletTxId = result.txId;
+      walletNewBalance = result.newBalance;
+
+      // Mark return as refunded
+      await tx.$executeRawUnsafe(
+        `UPDATE return_requests SET status = 'refunded', refund_amount = ?, refunded_at = NOW(3) WHERE id = ?`,
+        input.amount, row.id,
+      );
+
+      // Order event
+      await tx.orderEvent.create({
+        data: {
+          orderId: row.order_id,
+          type: 'refund',
+          message: `Refund of ${input.amount} ${order.currency} for return ${row.reference} credited to store wallet.`,
+          actor: 'admin',
+        },
+      });
+    });
+
+    await addEvent(row.id, 'refunded', 'admin', `Refund of ${input.amount} credited to customer wallet.`, actor.id);
+
+    void emitNotificationEvent({
+      type: 'wallet.refunded',
+      customerId: order.customerId!,
+      amountPaise: input.amount,
+      walletTxId: walletTxId!,
+      returnId: row.id,
+      newBalancePaise: walletNewBalance!,
+    });
+
+    return fetchReturnWithDetails(row.id);
+  }
+
+  // Non-wallet refund (manual bank/UPI or other)
   await prisma.$executeRawUnsafe(
     `INSERT INTO refunds (id, order_id, return_id, amount, reason, method, status, reference, completed_at, recorded_by, note, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
@@ -266,8 +350,6 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
   );
 
   // Update order refundedTotal and paymentStatus
-  const newRefundedTotal = order.refundedTotal + input.amount;
-  const newPaymentStatus = newRefundedTotal >= order.total ? 'refunded' : 'partially_refunded';
   await prisma.order.update({
     where: { id: row.order_id },
     data: {

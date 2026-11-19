@@ -53,7 +53,7 @@ export function toAdminSettings(s: {
   const { store, shipping, tax, currencies } = s;
   return {
     store: toAdminStoreSettings(store),
-    shipping: { zones: shipping.zones.map(toAdminShippingZone), unsupportedMessage: { en: shipping.unsupportedMessageEn }, updatedAt: shipping.updatedAt.toISOString() },
+    shipping: { zones: shipping.zones.map(toAdminShippingZone), unsupportedMessage: { en: shipping.unsupportedMessageEn, hi: shipping.unsupportedMessageHi }, updatedAt: shipping.updatedAt.toISOString() },
     tax: { pricesIncludeTax: tax.pricesIncludeTax, defaultRate: tax.defaultRate, rules: tax.rules.map(toAdminTaxRule), updatedAt: tax.updatedAt.toISOString() },
     currencies: { base: currencies.base, currencies: currencies.currencies.map(toAdminCurrencyConfig), ratesUpdatedAt: currencies.ratesUpdatedAt.toISOString(), autoSyncAt: currencies.autoSyncAt ? currencies.autoSyncAt.toISOString() : null, autoSyncError: currencies.autoSyncError, updatedAt: currencies.updatedAt.toISOString() },
   };
@@ -81,7 +81,7 @@ export function toPublicSettings(s: {
       },
       social: { instagram: store.socialInstagram, pinterest: store.socialPinterest, facebook: store.socialFacebook, youtube: store.socialYoutube },
     },
-    currencies: currencies.currencies.map((c) => ({ code: c.code, name: c.name, rate: c.rate, fractionDigits: c.fractionDigits })),
+    currencies: currencies.currencies.map((c) => ({ code: c.code, name: c.name, rate: c.rate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement })),
     shipping: {
       zones: shipping.zones.map(toAdminShippingZone),
       unsupportedMessage: { en: shipping.unsupportedMessageEn },

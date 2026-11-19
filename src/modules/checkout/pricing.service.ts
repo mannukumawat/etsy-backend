@@ -101,7 +101,11 @@ export function calculateTotals(input: TotalsInput): Totals {
   const subtotal = input.lineTotals.reduce((sum, n) => sum + n, 0);
   const discount = Math.min(input.discount, subtotal);
   const taxable = Math.max(0, subtotal - discount);
-  const tax = Math.round(taxable * (input.taxRate / 100));
+  // Inclusive: tax is already inside the gross subtotal — extract it with the gross-up formula.
+  // Exclusive: tax is added on top. Both formulas use integer arithmetic to avoid float drift.
+  const tax = input.taxInclusive
+    ? Math.round((taxable * input.taxRate) / (100 + input.taxRate))
+    : Math.round(taxable * (input.taxRate / 100));
   const total = input.taxInclusive ? taxable + input.shipping : taxable + input.shipping + tax;
   return { subtotal, discount, taxable, tax, shipping: input.shipping, total };
 }

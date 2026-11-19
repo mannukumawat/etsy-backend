@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
+import { emitNotificationEvent } from '../../shared/events/notification-events.js';
 import { toAdminOrder } from './order.mapper.js';
-import { addNoteSchema, advanceOrderSchema, cancelOrderSchema, codCollectionSchema, refundOrderSchema, updateTrackingSchema } from './order.schema.js';
-import { addOrderNote, advanceOrder, cancelOrder, getOrderById, listOrders, markOrderPaid, recordCodCollection, refundOrder, updateOrderTracking } from './order.service.js';
+import { addNoteSchema, advanceOrderSchema, cancelOrderSchema, refundOrderSchema, updateTrackingSchema } from './order.schema.js';
+import { addOrderNote, advanceOrder, cancelOrder, getOrderById, listOrders, markOrderPaid, refundOrder, updateOrderTracking } from './order.service.js';
 
 // Owner-only order management (rules and workflows live in order.service.ts).
 
@@ -32,7 +33,27 @@ adminOrdersRouter.patch(
   '/:id/advance',
   route(async (req, res) => {
     const input = advanceOrderSchema.parse(req.body);
-    res.json(toAdminOrder(await advanceOrder(req.params.id, input)));
+    const order = await advanceOrder(req.params.id, input);
+    const mapped = toAdminOrder(order);
+    res.json(mapped);
+
+    // Emit notification events after responding (fire-and-forget).
+    const baseFields = {
+      orderId: order.id,
+      orderNumber: order.number,
+      customerId: order.customerId,
+      customerEmail: order.customerEmail,
+    };
+    if (input.to === 'shipped') {
+      void emitNotificationEvent({
+        type: 'order.shipped',
+        ...baseFields,
+        carrier: input.carrier,
+        trackingNumber: input.trackingNumber,
+      });
+    } else if (input.to === 'delivered') {
+      void emitNotificationEvent({ type: 'order.delivered', ...baseFields });
+    }
   }),
 );
 
@@ -48,7 +69,15 @@ adminOrdersRouter.post(
   '/:id/cancel',
   route(async (req, res) => {
     const input = cancelOrderSchema.parse(req.body);
-    res.json(toAdminOrder(await cancelOrder(req.params.id, input, req.owner!.email)));
+    const order = await cancelOrder(req.params.id, input, req.owner!.email);
+    res.json(toAdminOrder(order));
+    void emitNotificationEvent({
+      type: 'order.cancelled',
+      orderId: order.id,
+      orderNumber: order.number,
+      customerId: order.customerId,
+      customerEmail: order.customerEmail,
+    });
   }),
 );
 
@@ -64,14 +93,6 @@ adminOrdersRouter.post(
   '/:id/mark-paid',
   route(async (req, res) => {
     res.json(toAdminOrder(await markOrderPaid(req.params.id)));
-  }),
-);
-
-adminOrdersRouter.post(
-  '/:id/record-cod-collection',
-  route(async (req, res) => {
-    const input = codCollectionSchema.parse(req.body);
-    res.json(toAdminOrder(await recordCodCollection(req.params.id, input)));
   }),
 );
 

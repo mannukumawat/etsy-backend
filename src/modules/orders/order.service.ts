@@ -2,7 +2,7 @@ import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, notFound } from '../../shared/errors/http-error.js';
 import { loadLineExtras } from './order-line-extras.service.js';
 import { ORDER_INCLUDE } from './order.mapper.js';
-import type { AddNoteInput, AdvanceOrderInput, CancelOrderInput, CodCollectionInput, RefundOrderInput, UpdateTrackingInput } from './order.schema.js';
+import type { AddNoteInput, AdvanceOrderInput, CancelOrderInput, RefundOrderInput, UpdateTrackingInput } from './order.schema.js';
 
 // Owner-only order management. The fulfilment state machine (unfulfilled -> processing -> shipped ->
 // delivered, with cancel only before shipping) and the payment rules (advance only while paid, cancel
@@ -40,8 +40,7 @@ async function loadOrderOr404(id: string) {
 export async function advanceOrder(id: string, input: AdvanceOrderInput) {
   const order = await loadOrderOr404(id);
 
-  const isCod = order.paymentMethod === 'cod';
-  if (!isCod && !['paid', 'partially_refunded'].includes(order.paymentStatus)) {
+  if (!['paid', 'partially_refunded'].includes(order.paymentStatus)) {
     throw conflict('This order must be paid before its fulfilment can advance.');
   }
   const currentIndex = FULFILMENT_ORDER.indexOf(order.fulfilmentStatus as (typeof FULFILMENT_ORDER)[number]);
@@ -164,34 +163,9 @@ export async function markOrderPaid(id: string) {
   if (order.paymentStatus !== 'unpaid' || order.fulfilmentStatus === 'cancelled') {
     throw conflict('Only an unpaid, non-cancelled order can be marked paid.');
   }
-  if (order.paymentMethod === 'cod' && order.fulfilmentStatus !== 'delivered') {
-    throw conflict('COD orders can only be marked paid after delivery.');
-  }
   return prisma.order.update({
     where: { id: order.id },
-    data: { paymentStatus: 'paid', events: { create: [{ type: 'payment', message: 'Marked as paid (cash on delivery collected).', actor: 'admin' }] } },
-    include: ORDER_INCLUDE,
-  });
-}
-
-export async function recordCodCollection(id: string, input: CodCollectionInput) {
-  const order = await prisma.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
-  if (!order) throw notFound('Order not found.');
-  if (order.paymentMethod !== 'cod') throw conflict('This endpoint is only for COD orders.');
-  if (order.paymentStatus !== 'unpaid') throw conflict('Payment has already been recorded for this order.');
-  if (order.fulfilmentStatus === 'cancelled') throw conflict('Cannot record collection for a cancelled order.');
-  const alreadyRecorded = order.events.some((e) => e.type === 'payment' && e.message.startsWith('COD collected'));
-  if (alreadyRecorded) throw conflict('COD collection already recorded for this order.');
-  if (input.amount !== order.total) throw badRequest(`Amount must equal the order total (${order.total} ${order.currency}).`, [{ path: 'amount', message: 'Must match order total.' }]);
-
-  const { collector, reference, note } = input;
-  const message = `COD collected: ${input.amount} ${order.currency} by ${collector}${reference ? ` (ref: ${reference})` : ''}${note ? `. ${note}` : ''}.`;
-  return prisma.order.update({
-    where: { id: order.id },
-    data: {
-      paymentStatus: 'paid',
-      events: { create: [{ type: 'payment', message, actor: 'admin' }] },
-    },
+    data: { paymentStatus: 'paid', events: { create: [{ type: 'payment', message: 'Marked as paid.', actor: 'admin' }] } },
     include: ORDER_INCLUDE,
   });
 }

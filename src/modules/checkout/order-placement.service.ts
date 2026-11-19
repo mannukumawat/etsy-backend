@@ -1,12 +1,14 @@
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict } from '../../shared/errors/http-error.js';
+import { emitNotificationEvent } from '../../shared/events/notification-events.js';
 import { buildRateSnapshot } from '../../shared/utils/currency.js';
 import { guestTokenExpiry, hashGuestToken, newGuestToken } from '../orders/order-guest-token.service.js';
 import { ORDER_INCLUDE } from '../orders/order.mapper.js';
 import type { PlaceOrderInput } from './checkout.schema.js';
 import { computePreview, customerKeyFor } from './checkout.service.js';
 import type { PlaceOrderResult } from './checkout.types.js';
-import { assertPaymentMethodAvailable, initialPaymentStatus } from './payment.service.js';
+import { assertPaymentMethodAvailable, initialPaymentStatus, verifyRazorpayOrderAmount, verifyRazorpaySignature } from './payment.service.js';
+import { debitWallet } from '../wallet/wallet.service.js';
 
 /**
  * Places a real order from a cart: runs the same server-side pricing pipeline as the totals preview,
@@ -14,7 +16,22 @@ import { assertPaymentMethodAvailable, initialPaymentStatus } from './payment.se
  * repeated `idempotencyKey` returns the original order untouched.
  */
 export async function placeOrder(input: PlaceOrderInput, customerId: string | null): Promise<PlaceOrderResult> {
-  assertPaymentMethodAvailable(input.paymentMethod);
+  const walletAmountPaise = input.walletAmountPaise ?? 0;
+  const isFullWalletPayment = walletAmountPaise > 0 && input.paymentMethod === 'wallet';
+
+  if (!isFullWalletPayment) {
+    // For non-wallet payments, Razorpay details are required.
+    assertPaymentMethodAvailable(input.paymentMethod);
+    if (!input.razorpayOrderId || !input.razorpayPaymentId || !input.razorpaySignature) {
+      throw badRequest('Payment details missing.', [{ path: 'razorpayPaymentId', message: 'Razorpay payment details required.' }]);
+    }
+    verifyRazorpaySignature(input.razorpayOrderId, input.razorpayPaymentId, input.razorpaySignature);
+  } else {
+    // Wallet payment: must be signed-in customer
+    if (!customerId) {
+      throw badRequest('You must be signed in to pay with your wallet.', [{ path: 'paymentMethod', message: 'Sign in required.' }]);
+    }
+  }
 
   const customerKey = customerKeyFor({ customerId, email: input.email });
 
@@ -23,7 +40,7 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
   if (already) return { replayed: true, order: already };
 
   const { context, resolved, stockIssues, quote, taxRate, totals, couponError, coupon } = await computePreview(
-    { lines: input.lines, currency: input.currency, country: input.address.country, shippingMethodId: input.shippingMethodId, couponCode: input.couponCode },
+    { lines: input.lines, currency: input.currency, country: input.address.country, region: input.address.region, shippingMethodId: input.shippingMethodId, couponCode: input.couponCode },
     customerKey,
   );
 
@@ -32,6 +49,29 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
   }
   if (!quote) throw badRequest('We do not ship to this destination yet.', [{ path: 'address.country', message: 'Unsupported destination.' }]);
   if (input.couponCode && couponError) throw badRequest(couponError, [{ path: 'couponCode', message: couponError }]);
+
+  // After computing the authoritative total, verify the Razorpay order was created for exactly
+  // that amount and currency. Prevents a tampered flow where a cheap external order is substituted.
+  if (!isFullWalletPayment && input.razorpayOrderId) {
+    await verifyRazorpayOrderAmount(input.razorpayOrderId, totals.total, input.currency);
+  }
+
+  // Wallet amount validation (INR paise; only INR orders can pay by wallet)
+  if (walletAmountPaise > 0) {
+    if (input.currency !== 'INR') {
+      throw badRequest('Wallet payment is only available for INR orders.', [{ path: 'walletAmountPaise', message: 'Non-INR currency.' }]);
+    }
+    // totals.total is already in minor units (paise for INR) — no conversion needed.
+    const orderTotalPaise = totals.total;
+    if (walletAmountPaise < orderTotalPaise) {
+      // Split payment not supported
+      const walletRupees = (walletAmountPaise / 100).toFixed(2);
+      throw badRequest(
+        `Full wallet payment only. Your wallet has ₹${walletRupees}. The order total is ₹${(orderTotalPaise / 100).toFixed(2)}.`,
+        [{ path: 'walletAmountPaise', message: 'Partial wallet payment not supported.' }],
+      );
+    }
+  }
 
   const rateSnapshot = buildRateSnapshot(context.allCurrencies);
 
@@ -118,7 +158,17 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
       await tx.couponRedemption.create({ data: { couponId: appliedCoupon.id, customerKey, orderId: created.id } });
     }
 
-    return created;
+    // Wallet debit (only for full wallet payment by signed-in customers)
+    let walletTxId: string | null = null;
+    let walletNewBalance: number | null = null;
+    if (isFullWalletPayment && customerId) {
+      const walletRef = `spend:order:${created.id}`;
+      const walletResult = await debitWallet(customerId, walletAmountPaise, 'spend', walletRef, { orderId: created.id, tx });
+      walletTxId = walletResult.txId;
+      walletNewBalance = walletResult.newBalance;
+    }
+
+    return { created, walletTxId, walletNewBalance };
   });
 
   // A concurrent checkout can claim the same next order number between our read and insert; the
@@ -127,15 +177,38 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
     const err = e as { code?: string; meta?: { target?: unknown } };
     return err?.code === 'P2002' && String(err.meta?.target ?? '').includes('number');
   };
-  let order: Awaited<ReturnType<typeof placeInTransaction>>;
+  let txResult: Awaited<ReturnType<typeof placeInTransaction>>;
   for (let attempt = 1; ; attempt++) {
     try {
-      order = await placeInTransaction();
+      txResult = await placeInTransaction();
       break;
     } catch (e) {
       if (attempt < 3 && isOrderNumberClash(e)) continue;
       throw e;
     }
+  }
+
+  const { created: order, walletTxId } = txResult!;
+
+  // Emit after transaction commits — fire-and-forget, never fails the caller.
+  void emitNotificationEvent({
+    type: 'order.placed',
+    orderId: order.id,
+    orderNumber: order.number,
+    customerId: customerId,
+    customerEmail: order.customerEmail,
+    totalPaise: order.total,
+    currency: order.currency,
+  });
+
+  if (isFullWalletPayment && customerId && walletTxId) {
+    void emitNotificationEvent({
+      type: 'wallet.spend',
+      customerId,
+      amountPaise: walletAmountPaise,
+      walletTxId,
+      orderId: order.id,
+    });
   }
 
   return { replayed: false, order, guestToken };
