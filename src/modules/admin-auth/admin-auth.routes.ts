@@ -5,15 +5,15 @@ import { CSRF_COOKIE, issueCsrfCookie } from '../../shared/middleware/csrf.middl
 import { env } from '../../shared/config/env.js';
 import { route } from '../../shared/http/async-route.js';
 import { unauthorized } from '../../shared/errors/http-error.js';
-import { loginAccountLimiter, loginIpLimiter } from '../../shared/middleware/rate-limit.middleware.js';
+import { ownerLoginAccountLimiter, ownerLoginIpLimiter } from '../../shared/middleware/rate-limit.middleware.js';
 import { loginSchema } from './admin-auth.schema.js';
 
 export const adminAuthRouter = Router();
 
 adminAuthRouter.post(
   '/login',
-  loginIpLimiter,
-  loginAccountLimiter,
+  ownerLoginIpLimiter,
+  ownerLoginAccountLimiter,
   route(async (req, res) => {
     const { email, password } = loginSchema.parse(req.body);
     const owner = await verifyOwnerCredentials(email, password);

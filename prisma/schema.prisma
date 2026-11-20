@@ -782,6 +782,8 @@ model Review {
   rating     Int
   title      String?   @db.VarChar(120)
   body       String?   @db.Text
+  /// JSON string[] of customer-uploaded review photo URLs.
+  photos     String    @default("[]") @db.Text
   /// 'published' | 'hidden' — set by owner moderation. New reviews publish immediately; hiding/
   /// restoring never rewrites the customer's original rating/title/body.
   status     String    @default("published")

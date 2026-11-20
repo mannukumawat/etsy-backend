@@ -54,7 +54,7 @@ export async function registerCustomer(input: CustomerRegisterInput) {
   const existing = await prisma.customer.findUnique({ where: { email } });
   if (existing) throw conflict('An account with this email already exists.', [{ path: 'email', message: 'Already registered.' }]);
   return prisma.customer.create({
-    data: { name: input.name.trim(), email, passwordHash: await hashPassword(input.password) },
+    data: { name: input.name.trim(), email, phone: input.phone ?? '', passwordHash: await hashPassword(input.password) },
   });
 }
 

@@ -3,7 +3,7 @@ import Razorpay from 'razorpay';
 import { badRequest } from '../../shared/errors/http-error.js';
 import { env, isPaymentGatewayConfigured, paymentGatewaySetupHelp } from '../../shared/config/env.js';
 
-export type PaymentMethod = 'card' | 'upi' | 'wallet';
+export type PaymentMethod = 'cod' | 'card' | 'upi' | 'wallet';
 
 let razorpay: Razorpay | null = null;
 if (env.PAYMENT_GATEWAY === 'razorpay' && env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
@@ -32,6 +32,7 @@ export function verifyRazorpaySignature(razorpayOrderId: string, razorpayPayment
 }
 
 export function assertPaymentMethodAvailable(method: PaymentMethod) {
+  if (method === 'cod') return;
   if (!isPaymentGatewayConfigured) {
     throw badRequest(
       `${method.toUpperCase()} payment is not available yet. ${paymentGatewaySetupHelp}`,
@@ -68,6 +69,6 @@ export async function verifyRazorpayOrderAmount(razorpayOrderId: string, expecte
 }
 
 /** Initial payment status. All gateway payments = paid (signature already verified). */
-export function initialPaymentStatus(_method: PaymentMethod): 'paid' {
-  return 'paid';
+export function initialPaymentStatus(method: PaymentMethod): 'unpaid' | 'paid' {
+  return method === 'cod' ? 'unpaid' : 'paid';
 }

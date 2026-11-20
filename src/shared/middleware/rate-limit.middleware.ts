@@ -43,19 +43,26 @@ const base = {
 
 /** Owner and customer login: 10/min per IP, 5/min per attempted account. */
 const LOGIN_WINDOW_MS = 60_000;
-export const loginIpLimiter = rateLimit({
+const createLoginIpLimiter = () => rateLimit({
   ...base,
   windowMs: LOGIN_WINDOW_MS,
   limit: 10,
   handler: jsonHandler('Too many sign-in attempts from this network. Please wait a moment and try again.', LOGIN_WINDOW_MS),
 });
-export const loginAccountLimiter = rateLimit({
+const createLoginAccountLimiter = () => rateLimit({
   ...base,
   windowMs: LOGIN_WINDOW_MS,
   limit: 5,
   keyGenerator: emailKey,
   handler: jsonHandler('Too many sign-in attempts for this account. Please wait a moment and try again.', LOGIN_WINDOW_MS),
 });
+
+// Owner and customer authentication are separate security realms. Independent stores prevent failed
+// attempts in one realm from throttling the other when the same email address is used in both.
+export const ownerLoginIpLimiter = createLoginIpLimiter();
+export const ownerLoginAccountLimiter = createLoginAccountLimiter();
+export const customerLoginIpLimiter = createLoginIpLimiter();
+export const customerLoginAccountLimiter = createLoginAccountLimiter();
 
 /** Registration: 10/hour per IP — slows mass account creation without blocking a shared office IP. */
 const REGISTER_WINDOW_MS = 60 * 60_000;

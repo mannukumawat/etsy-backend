@@ -1,9 +1,10 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
 import { env } from '../shared/config/env.js';
 import { prisma } from '../shared/database/prisma.js';
+import { createRealOwnerFixture, type RealOwnerFixture } from './support/real-owner.js';
 
 // Regression tests for the fixes from the 2026-10-31 access-control audit:
 //   1. GET /api/admin/media now requires the owner (previously open to anyone).
@@ -41,19 +42,27 @@ function cookieHeader(setCookie: unknown): string {
 describe('security regression: admin media access control', () => {
   let ownerCookies: string;
   let ownerCsrf: string;
+  let testOwner: RealOwnerFixture;
   const createdMediaIds: string[] = [];
+  const validPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nJ0AAAAASUVORK5CYII=';
 
   beforeAll(async () => {
+    testOwner = await createRealOwnerFixture('security');
     const res = await request(app)
       .post('/api/admin/auth/login')
-      .send({ email: env.OWNER_EMAIL, password: env.OWNER_PASSWORD });
+      .send({ email: testOwner.email, password: testOwner.password });
     expect(res.status).toBe(200);
     ownerCookies = cookieHeader(res.headers['set-cookie']);
     ownerCsrf = csrfFromSetCookie(res.headers['set-cookie']);
   });
 
   afterAll(async () => {
-    if (createdMediaIds.length) await prisma.media.deleteMany({ where: { id: { in: createdMediaIds } } });
+    try {
+      const ids = createdMediaIds.filter(Boolean);
+      if (ids.length) await prisma.media.deleteMany({ where: { id: { in: ids } } });
+    } finally {
+      await testOwner.cleanup();
+    }
   });
 
   it('rejects anonymous GET of the media inventory (was previously open — see audit 1.1)', async () => {
@@ -78,7 +87,7 @@ describe('security regression: admin media access control', () => {
       .post('/api/admin/media')
       .set('Cookie', ownerCookies)
       .set('x-csrf-token', ownerCsrf)
-      .send({ fileName: 'test-private.png', mimeType: 'image/png', base64: 'aGVsbG8td29ybGQ=', alt: { en: 'test', hi: '' } });
+      .send({ fileName: 'test-private.png', mimeType: 'image/png', base64: validPng, alt: { en: 'test', hi: '' } });
     expect(res.status).toBe(201);
     createdMediaIds.push(res.body.id);
 
@@ -101,7 +110,7 @@ describe('security regression: admin media access control', () => {
       .post('/api/admin/media')
       .set('Cookie', ownerCookies)
       .set('x-csrf-token', ownerCsrf)
-      .send({ fileName: 'unreferenced.png', mimeType: 'image/png', base64: 'aGVsbG8td29ybGQ=', alt: { en: '', hi: '' } });
+      .send({ fileName: 'unreferenced.png', mimeType: 'image/png', base64: validPng, alt: { en: '', hi: '' } });
     const id = upload.body.id;
     createdMediaIds.push(id);
 
@@ -109,8 +118,9 @@ describe('security regression: admin media access control', () => {
     expect(anon.status).toBe(404);
 
     const owner = await request(app).get(`/media/${id}`).set('Cookie', ownerCookies);
-    expect(owner.status).toBe(200);
-    expect(owner.headers['cache-control']).toBe('private, no-store');
+    expect([200, 301]).toContain(owner.status);
+    if (owner.status === 200) expect(owner.headers['cache-control']).toBe('private, no-store');
+    else expect(owner.headers.location).toMatch(/^https:\/\//);
   });
 
   it('maps a MySQL unique-constraint violation to a JSON 409, never an HTML stack trace', async () => {
@@ -132,10 +142,66 @@ describe('security regression: admin media access control', () => {
     const product = await prisma.product.findFirst({ where: { status: 'active' }, include: { images: true } });
     if (!product?.images[0]) return; // no seeded products in this environment — nothing to assert
     const res = await request(app).get(`/media/${product.images[0].mediaId}`);
-    expect(res.status).toBe(200);
-    expect(res.headers['cache-control']).toContain('public');
-    expect(res.headers['cross-origin-resource-policy']).toBe('cross-origin'); // storefront/admin <img> on other ports
-    expect(res.headers['content-security-policy']).toContain('sandbox'); // a directly-opened SVG can't script
+    expect([200, 301]).toContain(res.status);
+    if (res.status === 200) {
+      expect(res.headers['cache-control']).toContain('public');
+      expect(res.headers['cross-origin-resource-policy']).toBe('cross-origin'); // storefront/admin <img> on other ports
+      expect(res.headers['content-security-policy']).toContain('sandbox'); // a directly-opened SVG can't script
+    } else {
+      expect(res.headers.location).toMatch(/^https:\/\//);
+    }
+  });
+});
+
+describe('customer profile avatar persistence', () => {
+  const email = `test.avatar.${randomBytes(4).toString('hex')}@example.test`;
+  let mediaId: string | undefined;
+
+  afterAll(async () => {
+    await prisma.customer.deleteMany({ where: { email } });
+    if (mediaId) await prisma.media.deleteMany({ where: { id: mediaId } });
+  });
+
+  it('uploads an authenticated avatar, persists its URL and serves the referenced image', async () => {
+    const register = await request(app).post('/api/customer/auth/register').send({
+      name: 'Avatar Tester', email, phone: '9876500000', password: 'TestPass123',
+    });
+    expect(register.status).toBe(201);
+    expect(register.body.customer.phone).toBe('9876500000');
+    const cookies = cookieHeader(register.headers['set-cookie']);
+    const csrf = csrfFromSetCookie(register.headers['set-cookie']);
+
+    const upload = await request(app)
+      .post('/api/customer/profile/avatar')
+      .set('Cookie', cookies)
+      .set('x-csrf-token', csrf)
+      .send({
+        fileName: 'avatar.png',
+        mimeType: 'image/png',
+        base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nJ0AAAAASUVORK5CYII=',
+        width: 1,
+        height: 1,
+        alt: { en: 'Customer profile photo', hi: '' },
+      });
+    expect(upload.status).toBe(201);
+    expect(upload.body.customer.avatarUrl).toBe(upload.body.avatarUrl);
+    const stored = await prisma.media.findFirst({ where: { fileName: 'avatar.png' }, orderBy: { createdAt: 'desc' } });
+    expect(stored).not.toBeNull();
+    mediaId = stored!.id;
+
+    const restored = await request(app).get('/api/customer/auth/me').set('Cookie', cookies);
+    expect(restored.status).toBe(200);
+    expect(restored.body.customer.avatarUrl).toBe(upload.body.avatarUrl);
+
+    const avatarUrl = new URL(upload.body.avatarUrl);
+    if (avatarUrl.origin === new URL(env.PUBLIC_API_URL).origin) {
+      const image = await request(app).get(avatarUrl.pathname);
+      expect(image.status).toBe(200);
+      expect(image.headers['content-type']).toContain('image/png');
+    } else {
+      expect(avatarUrl.protocol).toBe('https:');
+      expect(stored!.cloudinaryUrl).toBe(upload.body.avatarUrl);
+    }
   });
 });
 
@@ -169,14 +235,6 @@ describe('security regression: order access control', () => {
     consumed.set(variantId, (consumed.get(variantId) ?? 0) + 1);
   }
 
-  function fakeRazorpayFields() {
-    const razorpayOrderId = `order_test_${randomBytes(8).toString('hex')}`;
-    const razorpayPaymentId = `pay_test_${randomBytes(8).toString('hex')}`;
-    const secret = env.RAZORPAY_KEY_SECRET ?? 'test_secret';
-    const razorpaySignature = createHmac('sha256', secret).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest('hex');
-    return { razorpayOrderId, razorpayPaymentId, razorpaySignature };
-  }
-
   async function placeGuestOrder(email: string) {
     const variant = await pickInStockVariant();
     const res = await request(app)
@@ -188,11 +246,10 @@ describe('security regression: order access control', () => {
         email,
         address: { fullName: 'Test Guest', phoneCountry: 'IN', phone: '9876500000', country: 'IN', line1: '1 Test Rd' },
         shippingMethodId: 'standard',
-        paymentMethod: 'card',
-        ...fakeRazorpayFields(),
+        paymentMethod: 'cod',
       });
     recordOrder(res.status, res.body, variant.id);
-    expect(res.status).toBe(201);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     return res.body as { id: string; accessToken?: string };
   }
 
@@ -245,8 +302,7 @@ describe('security regression: order access control', () => {
         email: emailA,
         address: { fullName: 'Test A', phoneCountry: 'IN', phone: '9876500001', country: 'IN', line1: '1 A Rd' },
         shippingMethodId: 'standard',
-        paymentMethod: 'card',
-        ...fakeRazorpayFields(),
+        paymentMethod: 'cod',
       });
     recordOrder(placed.status, placed.body, variant.id);
     expect(placed.status).toBe(201);

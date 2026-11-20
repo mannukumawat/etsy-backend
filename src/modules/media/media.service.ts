@@ -74,15 +74,16 @@ async function downloadImage(rawUrl: string): Promise<{ data: Buffer; mimeType: 
  * `getMediaBytes`), which is the only case that needs to see not-yet-published art.
  */
 async function isMediaPublic(id: string): Promise<boolean> {
-  const [productImage, categoryImage, logo, collectionHero, collectionCircle, homepage] = await Promise.all([
+  const [productImage, categoryImage, logo, collectionHero, collectionCircle, homepage, customerAvatar] = await Promise.all([
     prisma.productImage.findFirst({ where: { mediaId: id, product: { status: 'active', category: { isActive: true } } }, select: { id: true } }),
     prisma.category.findFirst({ where: { isActive: true, OR: [{ imageId: id }, { bannerId: id }] }, select: { id: true } }),
     prisma.storeSettings.findFirst({ where: { id: 'singleton', logoId: id }, select: { id: true } }),
     prisma.collection.findFirst({ where: { status: 'published', heroImageId: id }, select: { id: true } }),
     prisma.collectionCircle.findFirst({ where: { imageId: id, collection: { status: 'published' } }, select: { id: true } }),
     prisma.homepageContent.findUnique({ where: { id: 'singleton' }, select: { publishedJson: true } }),
+    prisma.customer.findFirst({ where: { avatarUrl: { contains: `/media/${id}` }, deletedAt: null }, select: { id: true } }),
   ]);
-  if (productImage || categoryImage || logo || collectionHero || collectionCircle) return true;
+  if (productImage || categoryImage || logo || collectionHero || collectionCircle || customerAvatar) return true;
   if (homepage?.publishedJson?.includes(`"${id}"`)) return true;
 
   // A variant's own image set (ProductVariant.imageIds, a JSON array) is checked separately: the

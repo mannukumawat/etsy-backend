@@ -19,6 +19,7 @@ export const customerPhoneField = z
 export const customerRegisterSchema = z.object({
   name: z.string().trim().min(2, 'Enter your full name.').max(80),
   email: customerEmailField,
+  phone: customerPhoneField.optional(),
   password: customerPasswordField,
 });
 export type CustomerRegisterInput = z.infer<typeof customerRegisterSchema>;

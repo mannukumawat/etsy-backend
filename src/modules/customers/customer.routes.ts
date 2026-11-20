@@ -3,6 +3,10 @@ import { prisma } from '../../shared/database/prisma.js';
 import { route } from '../../shared/http/async-route.js';
 import { requireCustomer } from '../../shared/middleware/customer-auth.middleware.js';
 import { toCustomerPublic } from './customer.mapper.js';
+import { mediaUploadSchema } from '../media/media.schema.js';
+import { uploadMedia } from '../media/media.service.js';
+import { mediaUrl } from '../../shared/config/env.js';
+import { badRequest } from '../../shared/errors/http-error.js';
 import { customerAddressSchema, customerProfileSchema, wishlistToggleSchema } from './customer.schema.js';
 import {
   deleteCustomerAddress,
@@ -40,6 +44,20 @@ customerRouter.put(
     const input = customerProfileSchema.parse(req.body);
     const customer = await updateCustomerProfile(req.customer!.sub, input);
     res.json({ customer: toCustomerPublic(customer) });
+  }),
+);
+
+customerRouter.post(
+  '/profile/avatar',
+  route(async (req, res) => {
+    const input = mediaUploadSchema.parse(req.body);
+    if (input.mimeType === 'image/svg+xml' || input.mimeType === 'image/gif') {
+      throw badRequest('Profile photos must be JPEG, PNG or WebP.');
+    }
+    const media = await uploadMedia(input);
+    const avatarUrl = media.cloudinaryUrl ?? mediaUrl(media.id);
+    const customer = await prisma.customer.update({ where: { id: req.customer!.sub }, data: { avatarUrl } });
+    res.status(201).json({ customer: toCustomerPublic(customer), avatarUrl });
   }),
 );
 

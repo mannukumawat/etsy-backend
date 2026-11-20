@@ -29,7 +29,7 @@ export const checkoutTotalsSchema = z.object({
 });
 export type CheckoutTotalsInput = z.infer<typeof checkoutTotalsSchema>;
 
-export const PAYMENT_METHODS = ['card', 'upi', 'wallet'] as const;
+export const PAYMENT_METHODS = ['cod', 'card', 'upi', 'wallet'] as const;
 
 export const placeOrderSchema = z.object({
   idempotencyKey: z.string().trim().min(1, 'Missing idempotency key.').max(100),

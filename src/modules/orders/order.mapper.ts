@@ -56,7 +56,7 @@ export function toAdminOrder(o: OrderRow, extras?: LineExtras) {
     total: o.total,
     refundedTotal: o.refundedTotal,
     shippingMethod: { id: o.shippingMethodId as 'standard' | 'express', label: o.shippingMethodLabel, minDays: o.shippingMinDays, maxDays: o.shippingMaxDays },
-    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'card' | 'upi' | 'wallet', reference: o.paymentReference },
+    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'cod' | 'card' | 'upi' | 'wallet', reference: o.paymentReference },
     fulfilment: {
       status: o.fulfilmentStatus as 'unfulfilled' | 'processing' | 'shipped' | 'delivered' | 'cancelled',
       carrier: o.carrier,

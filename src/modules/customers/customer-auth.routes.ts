@@ -5,8 +5,8 @@ import { notFound, unauthorized } from '../../shared/errors/http-error.js';
 import { route } from '../../shared/http/async-route.js';
 import { requireCustomer } from '../../shared/middleware/customer-auth.middleware.js';
 import {
-  loginAccountLimiter,
-  loginIpLimiter,
+  customerLoginAccountLimiter,
+  customerLoginIpLimiter,
   passwordResetAccountLimiter,
   passwordResetConfirmLimiter,
   passwordResetIpLimiter,
@@ -42,8 +42,8 @@ customerAuthRouter.post(
 
 customerAuthRouter.post(
   '/login',
-  loginIpLimiter,
-  loginAccountLimiter,
+  customerLoginIpLimiter,
+  customerLoginAccountLimiter,
   route(async (req, res) => {
     const { email, password } = customerLoginSchema.parse(req.body);
     const customer = await verifyCustomerCredentials(email, password);

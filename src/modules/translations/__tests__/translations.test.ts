@@ -1,8 +1,8 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../../app.js';
-import { env } from '../../../shared/config/env.js';
 import { prisma } from '../../../shared/database/prisma.js';
+import { createRealOwnerFixture, type RealOwnerFixture } from '../../../__tests__/support/real-owner.js';
 import { sourceHash } from '../translation.service.js';
 
 // Content translation overlay against the real dev database. Uses a dedicated test language row
@@ -21,11 +21,13 @@ describe('content translations', () => {
   let category: { slug: string; nameEn: string };
   let previous: { text: string } | null;
   let owner: { cookie: string; csrf: string };
+  let testOwner: RealOwnerFixture;
 
   beforeAll(async () => {
     category = await prisma.category.findFirstOrThrow({ where: { isActive: true }, select: { slug: true, nameEn: true } });
     previous = await prisma.contentTranslation.findUnique({ where: { lang_sourceHash: { lang: 'it', sourceHash: sourceHash(category.nameEn) } }, select: { text: true } });
-    const login = await request(app).post('/api/admin/auth/login').send({ email: env.OWNER_EMAIL, password: env.OWNER_PASSWORD });
+    testOwner = await createRealOwnerFixture('translations');
+    const login = await request(app).post('/api/admin/auth/login').send({ email: testOwner.email, password: testOwner.password });
     owner = session(login.headers['set-cookie']);
   });
 
@@ -38,6 +40,7 @@ describe('content translations', () => {
         update: { text: previous.text },
       });
     } else await prisma.contentTranslation.deleteMany({ where: { lang: 'it', sourceHash: hash } });
+    await testOwner.cleanup();
   });
 
   const italianName = async () => {

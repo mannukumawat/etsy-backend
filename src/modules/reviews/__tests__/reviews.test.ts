@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../../app.js';
-import { env } from '../../../shared/config/env.js';
 import { prisma } from '../../../shared/database/prisma.js';
+import { createRealOwnerFixture, type RealOwnerFixture } from '../../../__tests__/support/real-owner.js';
 
 // End-to-end review flow against the real dev database. Every customer/order/review created here is
 // removed in afterAll; assertions on an existing product's rating are made as deltas from a baseline,
@@ -74,6 +74,7 @@ describe('product reviews', () => {
   let owner: Session;
   let baseline: { count: number; distribution: Record<string, number> };
   let reviewId = '';
+  let testOwner: RealOwnerFixture;
 
   const publicSummary = async () => (await request(app).get(`/api/products/${product.slug}/reviews`)).body.summary as { average: number; count: number; distribution: Record<string, number> };
 
@@ -85,7 +86,8 @@ describe('product reviews', () => {
     await order(alice.id, product.id, 'delivered');
     await order(bob.id, product.id, 'delivered');
     await order(carol.id, product.id, 'shipped'); // not delivered yet → not eligible
-    const login = await request(app).post('/api/admin/auth/login').send({ email: env.OWNER_EMAIL, password: env.OWNER_PASSWORD });
+    testOwner = await createRealOwnerFixture('reviews');
+    const login = await request(app).post('/api/admin/auth/login').send({ email: testOwner.email, password: testOwner.password });
     expect(login.status).toBe(200);
     owner = session(login.headers['set-cookie']);
     baseline = await publicSummary();
@@ -95,6 +97,7 @@ describe('product reviews', () => {
     await prisma.review.deleteMany({ where: { customerId: { in: customerIds } } });
     await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
     await prisma.customer.deleteMany({ where: { id: { in: customerIds } } });
+    await testOwner.cleanup();
   });
 
   it('requires sign-in to submit', async () => {
