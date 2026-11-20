@@ -150,7 +150,7 @@ The admin sends cookies with every request, so its origin must appear in `CORS_O
 ## What this API does not cover yet
 
 - Card, UPI and wallet payments: modelled end to end but rejected at checkout until a real gateway is
-  integrated (cash on delivery works).
+  integrated. All orders are prepaid; cash on delivery is not offered.
 - Newsletter sign-up and the contact form (storefront in-memory mocks).
 - Product reviews and ratings (the storefront still ships sample reviews; the API returns none)
 - Storefront search, filtering, sorting and pagination run client-side over the fetched catalog.

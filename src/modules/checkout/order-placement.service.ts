@@ -18,9 +18,8 @@ import { debitWallet } from '../wallet/wallet.service.js';
 export async function placeOrder(input: PlaceOrderInput, customerId: string | null): Promise<PlaceOrderResult> {
   const walletAmountPaise = input.walletAmountPaise ?? 0;
   const isFullWalletPayment = walletAmountPaise > 0 && input.paymentMethod === 'wallet';
-  const isCashOnDelivery = input.paymentMethod === 'cod';
 
-  if (!isFullWalletPayment && !isCashOnDelivery) {
+  if (!isFullWalletPayment) {
     // For non-wallet payments, Razorpay details are required.
     assertPaymentMethodAvailable(input.paymentMethod);
     if (!input.razorpayOrderId || !input.razorpayPaymentId || !input.razorpaySignature) {
@@ -53,7 +52,7 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
 
   // After computing the authoritative total, verify the Razorpay order was created for exactly
   // that amount and currency. Prevents a tampered flow where a cheap external order is substituted.
-  if (!isFullWalletPayment && !isCashOnDelivery && input.razorpayOrderId) {
+  if (!isFullWalletPayment && input.razorpayOrderId) {
     await verifyRazorpayOrderAmount(input.razorpayOrderId, totals.total, input.currency);
   }
 

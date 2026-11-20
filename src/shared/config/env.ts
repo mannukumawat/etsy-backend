@@ -53,9 +53,9 @@ const schema = z.object({
   CLOUDINARY_API_SECRET: z.string().optional(),
 
   // --- Payments ------------------------------------------------------------------------------------
-  // Cash-on-delivery always works with no configuration. Card/UPI/wallet require a real gateway;
-  // without one configured, checkout rejects those methods with the exact env vars needed to enable
-  // them, rather than ever faking a "paid" result.
+  // Every payment method requires a real gateway; without one configured, checkout rejects those
+  // methods with the exact env vars needed to enable them, rather than ever faking a "paid" result.
+  // There is no cash on delivery: all orders are prepaid.
   PAYMENT_GATEWAY: z.enum(['none', 'razorpay', 'stripe']).default('none'),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
@@ -124,6 +124,6 @@ export const isPaymentGatewayConfigured =
       ? Boolean(env.STRIPE_SECRET_KEY)
       : false;
 
-/** Exact env vars an operator needs to set to enable a real (non-COD) payment method. */
+/** Exact env vars an operator needs to set to enable a real (online, prepaid) payment method. */
 export const paymentGatewaySetupHelp =
   'Set PAYMENT_GATEWAY=razorpay with RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET, or PAYMENT_GATEWAY=stripe with STRIPE_SECRET_KEY, in backend/.env.';

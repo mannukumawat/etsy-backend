@@ -587,7 +587,7 @@ model Order {
   shippingMethodLabel String
   shippingMinDays     Int
   shippingMaxDays     Int
-  /// 'cod' | 'card' | 'upi' | 'wallet'
+  /// 'card' | 'upi' | 'wallet' (rows placed before Cash on Delivery was removed may still carry 'cod')
   paymentMethod       String
   /// 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded'
   paymentStatus       String    @default("unpaid")

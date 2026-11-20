@@ -56,7 +56,12 @@ export function toAdminOrder(o: OrderRow, extras?: LineExtras) {
     total: o.total,
     refundedTotal: o.refundedTotal,
     shippingMethod: { id: o.shippingMethodId as 'standard' | 'express', label: o.shippingMethodLabel, minDays: o.shippingMinDays, maxDays: o.shippingMaxDays },
-    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'cod' | 'card' | 'upi' | 'wallet', reference: o.paymentReference },
+    // NOTE: rows placed before Cash on Delivery was removed may still carry paymentMethod 'cod' in
+    // the database. The stored value passes through here unchanged (this cast is compile-time only)
+    // and fulfilment never branches on payment method, so those legacy orders stay readable and
+    // fulfilable. No NEW order can be 'cod': the checkout Zod schema rejects it. Do not add 'cod'
+    // handling back; if the admin UI needs a label for these old rows, show a generic "Prepaid".
+    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'card' | 'upi' | 'wallet', reference: o.paymentReference },
     fulfilment: {
       status: o.fulfilmentStatus as 'unfulfilled' | 'processing' | 'shipped' | 'delivered' | 'cancelled',
       carrier: o.carrier,

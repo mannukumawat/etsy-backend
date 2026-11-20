@@ -592,7 +592,7 @@ async function seedContent() {
           section('Are these items handmade?', '', 'Every piece is made by hand in small batches, so small variations are part of the character.', ''),
           section('Do you ship internationally?', '', 'Yes, to many countries — check the shipping page for current destinations and rates.', ''),
           section('How do I care for ceramics?', '', 'Hand wash is recommended to keep glazes looking their best.', ''),
-          section('What payment methods do you accept?', '', 'Cash on delivery is always available; card and other online methods are added as they become available.', ''),
+          section('What payment methods do you accept?', '', 'All orders are prepaid — we accept card, UPI and store wallet. Cash on delivery is not available.', ''),
           section('Can I change my order after placing it?', '', 'Contact us as soon as possible — we can usually help before an order ships.', ''),
           section('How do I track my order?', '', 'Use the order tracking page with your order number and email.', ''),
         ],

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
+import { guestTokenExpiry, hashGuestToken, newGuestToken } from '../modules/orders/order-guest-token.service.js';
 import { env } from '../shared/config/env.js';
 import { prisma } from '../shared/database/prisma.js';
 import { createRealOwnerFixture, type RealOwnerFixture } from './support/real-owner.js';
@@ -229,13 +230,43 @@ describe('security regression: order access control', () => {
     return variant;
   }
 
-  function recordOrder(status: number, body: { id?: string }, variantId: string) {
-    if (status !== 201 || !body.id) return;
-    createdOrderIds.push(body.id);
-    consumed.set(variantId, (consumed.get(variantId) ?? 0) + 1);
+  /**
+   * Seeds a prepaid guest order directly via Prisma, minting the same one-time guest token
+   * checkout would issue. Cash on Delivery was removed, and placing a real order over HTTP now
+   * requires Razorpay details, which cannot be fabricated in tests — so these access-control
+   * tests seed the order instead of going through POST /api/checkout/orders (same pattern as
+   * reviews.test.ts). Seeded orders consume no stock, so `consumed` stays empty for them.
+   */
+  async function placeGuestOrder(email: string) {
+    const variant = await pickInStockVariant();
+    const rawToken = newGuestToken();
+    const order = await prisma.order.create({
+      data: {
+        number: `TST-${randomBytes(4).toString('hex')}`,
+        customerKind: 'guest',
+        customerName: 'Test Guest',
+        customerEmail: email,
+        shippingAddressJson: JSON.stringify({ fullName: 'Test Guest', phoneCountry: 'IN', phone: '9876500000', country: 'IN', line1: '1 Test Rd' }),
+        currency: 'USD',
+        rateSnapshotJson: JSON.stringify({ base: 'USD', rates: { USD: 1 }, asOf: new Date().toISOString(), illustrative: true }),
+        subtotal: 1000,
+        total: 1000,
+        shippingMethodId: 'standard',
+        shippingMethodLabel: 'Standard',
+        shippingMinDays: 3,
+        shippingMaxDays: 6,
+        paymentMethod: 'card',
+        paymentStatus: 'paid',
+        guestTokenHash: hashGuestToken(rawToken),
+        guestTokenExpiresAt: guestTokenExpiry(),
+        lines: { create: [{ productId: variant.productId, variantId: variant.id, sku: 'TEST', nameEn: 'Test line', unitPrice: 1000, quantity: 1, lineTotal: 1000 }] },
+      },
+    });
+    createdOrderIds.push(order.id);
+    return { id: order.id, accessToken: rawToken };
   }
 
-  async function placeGuestOrder(email: string) {
+  it('rejects Cash on Delivery at checkout (COD removed — all orders are prepaid)', async () => {
     const variant = await pickInStockVariant();
     const res = await request(app)
       .post('/api/checkout/orders')
@@ -243,15 +274,14 @@ describe('security regression: order access control', () => {
         idempotencyKey: `test-${randomBytes(8).toString('hex')}`,
         lines: [{ productId: variant.productId, variantId: variant.id, quantity: 1 }],
         currency: 'USD',
-        email,
-        address: { fullName: 'Test Guest', phoneCountry: 'IN', phone: '9876500000', country: 'IN', line1: '1 Test Rd' },
+        email: `test.cod.${randomBytes(4).toString('hex')}@example.test`,
+        address: { fullName: 'Test', phoneCountry: 'IN', phone: '9876500000', country: 'IN', line1: '1 Test Rd' },
         shippingMethodId: 'standard',
         paymentMethod: 'cod',
       });
-    recordOrder(res.status, res.body, variant.id);
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
-    return res.body as { id: string; accessToken?: string };
-  }
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('validation');
+  });
 
   it('mints a one-time access token for a guest order and requires it for GET /api/orders/:id', async () => {
     const email = `test.guest.${randomBytes(4).toString('hex')}@example.test`;
@@ -286,35 +316,42 @@ describe('security regression: order access control', () => {
     const regA = await request(app).post('/api/customer/auth/register').send({ name: 'Test A', email: emailA, password: 'TestPass123' });
     const regB = await request(app).post('/api/customer/auth/register').send({ name: 'Test B', email: emailB, password: 'TestPass123' });
     const cookiesA = cookieHeader(regA.headers['set-cookie']);
-    const csrfA = csrfFromSetCookie(regA.headers['set-cookie']);
     const cookiesB = cookieHeader(regB.headers['set-cookie']);
 
     const variant = await pickInStockVariant();
 
-    const placed = await request(app)
-      .post('/api/checkout/orders')
-      .set('Cookie', cookiesA)
-      .set('x-csrf-token', csrfA)
-      .send({
-        idempotencyKey: `test-${randomBytes(8).toString('hex')}`,
-        lines: [{ productId: variant.productId, variantId: variant.id, quantity: 1 }],
+    // Seed A's prepaid account order directly (see placeGuestOrder: HTTP placement now needs
+    // Razorpay details). Account orders get no guest token.
+    const placed = await prisma.order.create({
+      data: {
+        number: `TST-${randomBytes(4).toString('hex')}`,
+        customerId: regA.body.customer.id,
+        customerKind: 'account',
+        customerName: 'Test A',
+        customerEmail: emailA,
+        shippingAddressJson: JSON.stringify({ fullName: 'Test A', phoneCountry: 'IN', phone: '9876500001', country: 'IN', line1: '1 A Rd' }),
         currency: 'USD',
-        email: emailA,
-        address: { fullName: 'Test A', phoneCountry: 'IN', phone: '9876500001', country: 'IN', line1: '1 A Rd' },
+        rateSnapshotJson: JSON.stringify({ base: 'USD', rates: { USD: 1 }, asOf: new Date().toISOString(), illustrative: true }),
+        subtotal: 1000,
+        total: 1000,
         shippingMethodId: 'standard',
-        paymentMethod: 'cod',
-      });
-    recordOrder(placed.status, placed.body, variant.id);
-    expect(placed.status).toBe(201);
-    expect(placed.body.accessToken).toBeUndefined(); // account orders get no guest token
+        shippingMethodLabel: 'Standard',
+        shippingMinDays: 3,
+        shippingMaxDays: 6,
+        paymentMethod: 'card',
+        paymentStatus: 'paid',
+        lines: { create: [{ productId: variant.productId, variantId: variant.id, sku: 'TEST', nameEn: 'Test line', unitPrice: 1000, quantity: 1, lineTotal: 1000 }] },
+      },
+    });
+    createdOrderIds.push(placed.id);
 
-    const bReads = await request(app).get(`/api/orders/${placed.body.id}`).set('Cookie', cookiesB);
+    const bReads = await request(app).get(`/api/orders/${placed.id}`).set('Cookie', cookiesB);
     expect(bReads.status).toBe(404);
 
-    const anonReads = await request(app).get(`/api/orders/${placed.body.id}`);
+    const anonReads = await request(app).get(`/api/orders/${placed.id}`);
     expect(anonReads.status).toBe(404);
 
-    const aReads = await request(app).get(`/api/orders/${placed.body.id}`).set('Cookie', cookiesA);
+    const aReads = await request(app).get(`/api/orders/${placed.id}`).set('Cookie', cookiesA);
     expect(aReads.status).toBe(200);
   });
 
