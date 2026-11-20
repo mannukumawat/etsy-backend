@@ -16,6 +16,7 @@ function prismaIssue(e: { code?: string; meta?: unknown }): HttpError | null {
   if (e.code === 'P2025') return notFound();
   if (e.code === 'P2003') return badRequest('A referenced record does not exist.');
   if (e.code === 'P2028') return new HttpError(503, 'database_timeout', 'The product save took too long. Please try again.');
+  if (e.code === 'P2037') return new HttpError(503, 'database_busy', 'The database is busy right now. Please wait a moment and try again.');
   return null;
 }
 

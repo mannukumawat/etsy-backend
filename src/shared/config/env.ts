@@ -4,6 +4,8 @@ import { z } from 'zod';
 // Fail fast and loudly: a half-configured API is worse than one that refuses to start.
 const schema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required (see .env.example).'),
+  DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(10).default(1),
+  DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(60).default(20),
   PORT: z.coerce.number().int().positive().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:5174'),
