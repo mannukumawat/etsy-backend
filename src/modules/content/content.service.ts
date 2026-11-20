@@ -14,7 +14,7 @@ const LEGAL_PAGES = new Set<string>(['returns', 'privacy', 'terms']);
 // are required fields, same as the mock's own draft-time rules.
 const EMPTY_HOMEPAGE: HomepageContentInput = homepageContentSchema.parse({
   announcement: { enabled: false, text: { en: '', hi: '' } },
-  hero: { title: { en: 'Your Store' }, subtitle: { en: '' }, imageId: null, ctaLabel: { en: 'Shop now' }, ctaHref: '/shop' },
+  hero: { title: { en: 'Your Store' }, subtitle: { en: '' }, imageId: null, ctaLabel: { en: 'View product' }, ctaHref: '/product/choose-a-product' },
   slides: [],
   featuredCategoryIds: [],
   featuredProductIds: [],
@@ -41,6 +41,24 @@ async function assertHomepageReferencesExist(c: HomepageContentInput, publishing
   if (c.hero.imageId) await assertMedia(c.hero.imageId, 'hero.imageId');
   if (c.story.imageId) await assertMedia(c.story.imageId, 'story.imageId');
   for (const [i, sl] of c.slides.entries()) if (sl.imageId) await assertMedia(sl.imageId, `slides.${i}.imageId`);
+
+  const bannerLinks = [
+    { href: c.hero.ctaHref, path: 'hero.ctaHref' },
+    ...c.slides.map((slide, index) => ({ href: slide.ctaHref, path: `slides.${index}.ctaHref` })),
+  ];
+  const bannerSlugs = [...new Set(bannerLinks.map(({ href }) => href.slice('/product/'.length)))];
+  const bannerProducts = await prisma.product.findMany({
+    where: { slug: { in: bannerSlugs } },
+    select: { slug: true, nameEn: true, status: true },
+  });
+  for (const link of bannerLinks) {
+    const slug = link.href.slice('/product/'.length);
+    const product = bannerProducts.find((candidate) => candidate.slug === slug);
+    if (!product) throw badRequest('The banner product no longer exists.', [{ path: link.path, message: 'Choose an existing product.' }]);
+    if (publishing && product.status !== 'active') {
+      throw conflict(`"${product.nameEn}" is not active, so its banner cannot be published.`, [{ path: link.path, message: 'Choose an active product.' }]);
+    }
+  }
 
   const productIds = [...new Set([...c.featuredProductIds, ...c.bestsellerProductIds, ...c.newArrivalProductIds, ...c.itemsProductIds, ...c.transferProductIds])];
   if (productIds.length) {

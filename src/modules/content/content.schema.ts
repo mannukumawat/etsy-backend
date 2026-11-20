@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { localized } from '../../shared/validation/common.schema.js';
 
 const isSiteLinkOrUrl = (href: string) => href === '' || href.startsWith('/') || /^https?:\/\//i.test(href);
+const isProductLink = (href: string) => /^\/product\/[a-z0-9][a-z0-9-]*$/i.test(href);
 
 const idList = (max: number) =>
   z
@@ -53,9 +54,11 @@ export const homepageContentSchema = z
     const add = (path: (string | number)[], message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
     if (c.announcement.enabled && !c.announcement.text.en.trim()) add(['announcement', 'text', 'en'], 'Announcement text is required while the bar is enabled.');
     if (!isSiteLinkOrUrl(c.hero.ctaHref)) add(['hero', 'ctaHref'], 'Use a site path like /shop or a full https:// URL.');
+    else if (!isProductLink(c.hero.ctaHref)) add(['hero', 'ctaHref'], 'Choose an active product for the hero banner.');
     c.slides.forEach((sl, i) => {
       if (!sl.imageId) add(['slides', i, 'imageId'], 'Choose an image for this banner.');
       if (!isSiteLinkOrUrl(sl.ctaHref)) add(['slides', i, 'ctaHref'], 'Use a site path like /shop or a full https:// URL.');
+      else if (!isProductLink(sl.ctaHref)) add(['slides', i, 'ctaHref'], 'Choose an active product for this banner.');
     });
     if (c.story.ctaHref && !isSiteLinkOrUrl(c.story.ctaHref)) add(['story', 'ctaHref'], 'Use a site path like /about or a full https:// URL.');
   });
