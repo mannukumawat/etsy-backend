@@ -99,6 +99,15 @@ export function createApp() {
       credentials: true,
     }),
   );
+  // Serve frequently-read public catalogue/content from Vercel's edge after the first request.
+  // This avoids paying a serverless cold start and database round trip on every page navigation.
+  app.use((req, res, next) => {
+    const cacheablePublicGet =
+      req.method === 'GET' &&
+      /^\/api\/(products|categories|settings|content|help|i18n|nav-links|item-groups|collections)(\/|$)/.test(req.path);
+    if (cacheablePublicGet) res.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+    next();
+  });
   // Raw-body webhooks MUST be mounted before express.json() — once express.json() runs the Buffer
   // is gone and signature verification against the raw body is impossible.
   app.post('/api/webhooks/wallet/razorpay', express.raw({ type: 'application/json' }), route(handleWalletRazorpayWebhook));

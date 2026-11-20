@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../../shared/database/prisma.js';
 import { route } from '../../shared/http/async-route.js';
 import { toItemGroup } from './item-group.mapper.js';
-import { PRODUCT_INCLUDE, toStorefrontProduct } from '../products/product.mapper.js';
+import { PRODUCT_INCLUDE, toStorefrontListProduct } from '../products/product.mapper.js';
 import { ratingSummaries } from '../reviews/review-stats.service.js';
 
 export const publicItemGroupsRouter = Router();
@@ -37,16 +37,7 @@ publicItemGroupsRouter.get(
       .map((group) => ({
         ...toItemGroup(group),
         products: group.products.map((row) => {
-          const product = toStorefrontProduct(row, ratings.get(row.id));
-          return {
-            ...product,
-            description: { en: '' },
-            shortDescription: { en: '' },
-            materials: { en: '' },
-            care: { en: '' },
-            images: product.images.slice(0, 2),
-            variants: product.variants.map((variant) => ({ ...variant, images: [] })),
-          };
+          return toStorefrontListProduct(row, ratings.get(row.id));
         }),
       }))
       .filter((group) => group.products.length > 0);

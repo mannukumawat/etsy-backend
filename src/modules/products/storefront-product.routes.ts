@@ -11,6 +11,7 @@ storefrontProductRouter.get(
     const categories = String(req.query.category ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     const ids = String(req.query.ids ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 200));
+    res.set('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=120');
     res.json(await listStorefrontProducts({ q, categories, ids, limit }));
   }),
 );
@@ -18,6 +19,7 @@ storefrontProductRouter.get(
 storefrontProductRouter.get(
   '/products/:slug',
   route(async (req, res) => {
+    res.set('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=120');
     res.json(await getStorefrontProductBySlug(req.params.slug));
   }),
 );

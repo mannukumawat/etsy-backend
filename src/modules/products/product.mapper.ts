@@ -116,8 +116,9 @@ export function toStorefrontProduct(p: ProductRow, reviews: ReviewSummary = EMPT
       price: v.price,
       ...(v.salePrice != null ? { salePrice: v.salePrice } : {}),
       stock: v.stock,
-      // Variant-specific images when set, otherwise the whole gallery (matches the mock behaviour).
-      images: parseStringArray(v.imageIds).length ? parseStringArray(v.imageIds).map(imageFor) : gallery,
+      // Only send true variant-specific images. Repeating the full product gallery inside every
+      // variant made catalogue responses several times larger; the client falls back to `images`.
+      images: parseStringArray(v.imageIds).map(imageFor),
     })),
     materials: Lopt(p.materialsEn, p.materialsHi),
     care: Lopt(p.careEn, p.careHi),
@@ -136,6 +137,20 @@ export function toStorefrontProduct(p: ProductRow, reviews: ReviewSummary = EMPT
     isNew: p.isNew,
     createdAt: p.createdAt.toISOString(),
     featuredRank: p.displayOrder,
+  };
+}
+
+/** Compact catalogue shape used by grids/search. Product detail keeps the complete payload above. */
+export function toStorefrontListProduct(p: ProductRow, reviews: ReviewSummary = EMPTY_REVIEW_SUMMARY) {
+  const product = toStorefrontProduct(p, reviews);
+  return {
+    ...product,
+    description: { en: '' },
+    care: { en: '' },
+    images: product.images.slice(0, 2),
+    variants: product.variants.map((variant) => ({ ...variant, images: variant.images.slice(0, 1) })),
+    dimensions: [],
+    reviews: [],
   };
 }
 

@@ -1,7 +1,7 @@
 import { prisma } from '../../shared/database/prisma.js';
 import { notFound } from '../../shared/errors/http-error.js';
 import { productReviewSummary, ratingSummaries } from '../reviews/review-stats.service.js';
-import { PRODUCT_INCLUDE, toStorefrontProduct } from './product.mapper.js';
+import { PRODUCT_INCLUDE, toStorefrontListProduct, toStorefrontProduct } from './product.mapper.js';
 import type { StorefrontProductQuery } from './product.types.js';
 
 // Public catalog. Only `active` products inside `isActive` categories are ever visible here —
@@ -21,7 +21,7 @@ export async function listStorefrontProducts({ q, categories, ids, limit }: Stor
 
   const rows = await prisma.product.findMany({ where, include: PRODUCT_INCLUDE, orderBy: [{ displayOrder: 'asc' }, { nameEn: 'asc' }], take: limit });
   const ratings = await ratingSummaries(rows.map((r) => r.id));
-  return { items: rows.map((r) => toStorefrontProduct(r, ratings.get(r.id))), total: rows.length };
+  return { items: rows.map((r) => toStorefrontListProduct(r, ratings.get(r.id))), total: rows.length };
 }
 
 export async function getStorefrontProductBySlug(slug: string) {
