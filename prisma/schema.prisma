@@ -980,10 +980,10 @@ model NotificationSend {
 
 /// One row per customer. Created on first top-up or refund credit.
 model WalletBalance {
-  customerId   String   @id
-  /// Balance in INR paise (integer minor units). Never negative.
-  balancePaise Int      @default(0)
-  updatedAt    DateTime @updatedAt
+  customerId    String   @id
+  /// Balance in USD cents (base currency minor units). Never negative.
+  balanceMinor  Int      @default(0)
+  updatedAt     DateTime @updatedAt
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
@@ -996,8 +996,8 @@ model WalletTransaction {
   customerId   String
   /// 'topup' | 'spend' | 'refund' | 'reversal'
   type         String   @db.VarChar(20)
-  /// Positive = credit, negative = debit. Always in INR paise.
-  amountPaise  Int
+  /// Positive = credit, negative = debit. Always in USD cents (base currency).
+  amountMinor  Int
   balanceAfter Int
   /// Idempotency key — unique per business event.
   reference    String   @unique @db.VarChar(191)
@@ -1018,8 +1018,10 @@ model WalletTransaction {
 model WalletTopup {
   id                String    @id @default(cuid())
   customerId        String
-  /// Amount customer requested to add, in INR paise.
-  amountPaise       Int
+  /// Amount customer paid in their display currency minor units (e.g. USD cents, INR paise).
+  amountMinor       Int
+  /// ISO 4217 currency code the customer paid in (e.g. "USD", "INR").
+  currency          String    @default("USD") @db.VarChar(10)
   razorpayOrderId   String    @unique @db.VarChar(255)
   razorpayPaymentId String?   @db.VarChar(255)
   /// 'pending' | 'paid' | 'failed'

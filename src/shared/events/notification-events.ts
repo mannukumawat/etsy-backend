@@ -26,7 +26,7 @@ export type NotificationEventType =
   | 'inventory.low_stock';
 
 export type NotificationEvent =
-  | { type: 'order.placed'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string; totalPaise: number; currency: string }
+  | { type: 'order.placed'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string; totalMinor: number; currency: string }
   | { type: 'order.shipped'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string; carrier?: string; trackingNumber?: string }
   | { type: 'order.delivered'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string }
   | { type: 'order.cancelled'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string }
@@ -34,11 +34,11 @@ export type NotificationEvent =
   | { type: 'return.approved'; returnId: string; returnReference: string; customerId: string; customerEmail: string }
   | { type: 'return.rejected'; returnId: string; returnReference: string; customerId: string; customerEmail: string; reason?: string }
   | { type: 'return.pickup_arranged'; returnId: string; returnReference: string; customerId: string; customerEmail: string }
-  | { type: 'refund.completed'; refundId: string; orderId: string; customerId: string; amountPaise: number; method: string }
-  | { type: 'refund.failed'; refundId: string; orderId: string; customerId: string; amountPaise: number; method: string }
-  | { type: 'wallet.topped_up'; customerId: string; amountPaise: number; walletTxId: string; newBalancePaise: number }
-  | { type: 'wallet.refunded'; customerId: string; amountPaise: number; walletTxId: string; returnId?: string; newBalancePaise: number }
-  | { type: 'wallet.spend'; customerId: string; amountPaise: number; walletTxId: string; orderId: string }
+  | { type: 'refund.completed'; refundId: string; orderId: string; customerId: string; amountMinor: number; method: string }
+  | { type: 'refund.failed'; refundId: string; orderId: string; customerId: string; amountMinor: number; method: string }
+  | { type: 'wallet.topped_up'; customerId: string; amountMinor: number; walletTxId: string; newBalanceMinor: number }
+  | { type: 'wallet.refunded'; customerId: string; amountMinor: number; walletTxId: string; returnId?: string; newBalanceMinor: number }
+  | { type: 'wallet.spend'; customerId: string; amountMinor: number; walletTxId: string; orderId: string }
   | { type: 'inventory.low_stock'; variantId: string; sku: string; productName: string; stock: number; threshold: number };
 
 /** Handler registered by the notifications module. Replaced at startup; no-op until set. */

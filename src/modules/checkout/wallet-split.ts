@@ -10,18 +10,18 @@ import { badRequest } from '../../shared/errors/http-error.js';
  * - partial === total → full wallet: nothing is charged to Razorpay.
  * - partial > total → rejected: the wallet leg can never exceed the order total.
  */
-export function splitWalletPayment(totalPaise: number, walletPartialPaise: number): {
-  walletPaise: number;
-  razorpayPaise: number;
+export function splitWalletPayment(totalMinor: number, walletPartialMinor: number): {
+  walletMinor: number;
+  razorpayMinor: number;
   isFullWallet: boolean;
   isSplitWallet: boolean;
 } {
-  const partial = Math.trunc(walletPartialPaise ?? 0);
-  if (partial < 0) throw badRequest('Wallet amount cannot be negative.', [{ path: 'walletPartialPaise', message: 'Must be 0 or more.' }]);
-  if (partial > totalPaise) {
-    throw badRequest('Wallet amount cannot exceed the order total.', [{ path: 'walletPartialPaise', message: 'Exceeds the order total.' }]);
+  const partial = Math.trunc(walletPartialMinor ?? 0);
+  if (partial < 0) throw badRequest('Wallet amount cannot be negative.', [{ path: 'walletPartialMinor', message: 'Must be 0 or more.' }]);
+  if (partial > totalMinor) {
+    throw badRequest('Wallet amount cannot exceed the order total.', [{ path: 'walletPartialMinor', message: 'Exceeds the order total.' }]);
   }
-  if (partial === 0) return { walletPaise: 0, razorpayPaise: totalPaise, isFullWallet: false, isSplitWallet: false };
-  if (partial === totalPaise) return { walletPaise: totalPaise, razorpayPaise: 0, isFullWallet: true, isSplitWallet: false };
-  return { walletPaise: partial, razorpayPaise: totalPaise - partial, isFullWallet: false, isSplitWallet: true };
+  if (partial === 0) return { walletMinor: 0, razorpayMinor: totalMinor, isFullWallet: false, isSplitWallet: false };
+  if (partial === totalMinor) return { walletMinor: totalMinor, razorpayMinor: 0, isFullWallet: true, isSplitWallet: false };
+  return { walletMinor: partial, razorpayMinor: totalMinor - partial, isFullWallet: false, isSplitWallet: true };
 }

@@ -175,13 +175,13 @@ export async function previewCheckoutTotals(input: CheckoutTotalsInput, buyer: B
   // Include wallet balance for signed-in customers so the checkout UI can show the wallet option.
   let wallet: WalletPreviewInfo | null = null;
   if (buyer.customerId) {
-    const balancePaise = await getBalance(buyer.customerId);
-    if (balancePaise > 0) {
-      // totals.total is in minor units (paise for INR); wallet is INR paise only.
-      const totalPaise = input.currency === 'INR' ? totals.total : 0;
+    const balanceUsdCents = await getBalance(buyer.customerId);
+    if (balanceUsdCents > 0) {
+      // Convert wallet balance from USD cents to display currency minor units
+      const balanceMinor = convertFromBase(balanceUsdCents, context.currency);
       wallet = {
-        balancePaise,
-        maxApplicablePaise: totalPaise > 0 ? Math.min(balancePaise, totalPaise) : 0,
+        balanceMinor,
+        maxApplicableMinor: Math.min(balanceMinor, totals.total),
       };
     }
   }

@@ -425,16 +425,16 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
       : null;
     const balance = await prisma.walletBalance.findUnique({
       where: { customerId: order.customerId },
-      select: { balancePaise: true },
+      select: { balanceMinor: true },
     });
     if (walletTx && balance) {
       void emitNotificationEvent({
         type: 'wallet.refunded',
         customerId: order.customerId,
-        amountPaise: input.amount,
+        amountMinor: input.amount,
         walletTxId: walletTx.id,
         returnId: row.id,
-        newBalancePaise: balance.balancePaise,
+        newBalanceMinor: balance.balanceMinor,
       });
     }
 

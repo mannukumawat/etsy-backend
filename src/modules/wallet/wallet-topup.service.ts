@@ -6,6 +6,19 @@ import { createRazorpayOrder, fetchRazorpayPayment, verifyRazorpaySignature, typ
 import { creditWallet } from './wallet.service.js';
 import type { CreateTopupInput, VerifyTopupInput } from './wallet.schema.js';
 
+/** Look up the exchange rate for a currency (minor units per 1 USD cent). Falls back to 1 for USD. */
+async function getRateForCurrency(currencyCode: string): Promise<number> {
+  if (currencyCode === 'USD') return 1;
+  const cfg = await prisma.currencyConfig.findFirst({
+    where: { settingsId: 'singleton', code: currencyCode, enabled: true },
+    select: { rate: true },
+  });
+  if (!cfg || !Number.isFinite(cfg.rate) || cfg.rate <= 0) {
+    throw badRequest(`Currency ${currencyCode} is not available for wallet top-up.`, [{ path: 'currency', message: 'Not available.' }]);
+  }
+  return cfg.rate;
+}
+
 /** Injectable payment fetch so the amount check is unit-testable with a mock. */
 export interface TopupDeps {
   fetchPayment?: (razorpayPaymentId: string) => Promise<RazorpayPaymentLike>;
@@ -19,7 +32,7 @@ const defaultFetchPayment = (razorpayPaymentId: string) => fetchRazorpayPayment(
  * order — it says nothing about the amount captured or whether the capture succeeded.
  */
 async function assertCapturedTopupPayment(
-  topup: { amountPaise: number },
+  topup: { amountMinor: number; currency: string },
   razorpayPaymentId: string,
   deps?: TopupDeps,
 ): Promise<void> {
@@ -28,11 +41,11 @@ async function assertCapturedTopupPayment(
   if (payment.status !== 'captured') {
     throw badRequest('Top-up payment was not captured.', [{ path: 'razorpayPaymentId', message: `Payment status is '${payment.status}', not 'captured'.` }]);
   }
-  if (payment.currency !== 'INR') {
-    throw badRequest('Top-up payment currency mismatch.', [{ path: 'razorpayPaymentId', message: `Expected INR, got ${payment.currency}.` }]);
+  if (payment.currency !== topup.currency) {
+    throw badRequest('Top-up payment currency mismatch.', [{ path: 'razorpayPaymentId', message: `Expected ${topup.currency}, got ${payment.currency}.` }]);
   }
-  if (payment.amount !== topup.amountPaise) {
-    throw badRequest('Top-up payment amount does not match the requested top-up amount.', [{ path: 'razorpayPaymentId', message: `Expected ${topup.amountPaise}, got ${payment.amount}.` }]);
+  if (payment.amount !== topup.amountMinor) {
+    throw badRequest('Top-up payment amount does not match the requested top-up amount.', [{ path: 'razorpayPaymentId', message: `Expected ${topup.amountMinor}, got ${payment.amount}.` }]);
   }
 }
 
@@ -42,21 +55,29 @@ export async function initiateTopup(customerId: string, input: CreateTopupInput)
     throw badRequest('Wallet top-up is not enabled.');
   }
 
-  const { amountPaise } = input;
-  if (amountPaise < env.WALLET_TOPUP_MIN_PAISE) {
-    throw badRequest(`Minimum top-up amount is ₹${(env.WALLET_TOPUP_MIN_PAISE / 100).toFixed(0)}.`, [{ path: 'amountPaise', message: 'Below minimum.' }]);
+  const { amountMinor, currency } = input;
+
+  // Validate currency is available and get the rate for later USD conversion
+  await getRateForCurrency(currency);
+
+  // Convert to USD cents to check against min/max limits
+  const rate = await getRateForCurrency(currency);
+  const usdCents = Math.round(amountMinor / rate);
+  if (usdCents < env.WALLET_TOPUP_MIN_CENTS) {
+    throw badRequest(`Minimum top-up is $${(env.WALLET_TOPUP_MIN_CENTS / 100).toFixed(0)} USD equivalent.`, [{ path: 'amountMinor', message: 'Below minimum.' }]);
   }
-  if (amountPaise > env.WALLET_TOPUP_MAX_PAISE) {
-    throw badRequest(`Maximum top-up amount is ₹${(env.WALLET_TOPUP_MAX_PAISE / 100).toFixed(0)}.`, [{ path: 'amountPaise', message: 'Above maximum.' }]);
+  if (usdCents > env.WALLET_TOPUP_MAX_CENTS) {
+    throw badRequest(`Maximum top-up is $${(env.WALLET_TOPUP_MAX_CENTS / 100).toFixed(0)} USD equivalent.`, [{ path: 'amountMinor', message: 'Above maximum.' }]);
   }
 
-  // Create the Razorpay order first so we have an order ID for the receipt
-  const rzpOrder = await createRazorpayOrder(amountPaise, 'INR', `wallet-${customerId.slice(-8)}`);
+  // Create the Razorpay order in the customer's chosen currency
+  const rzpOrder = await createRazorpayOrder(amountMinor, currency, `wallet-${customerId.slice(-8)}`);
 
   const topup = await prisma.walletTopup.create({
     data: {
       customerId,
-      amountPaise,
+      amountMinor,
+      currency,
       razorpayOrderId: rzpOrder.id,
       status: 'pending',
     },
@@ -66,7 +87,8 @@ export async function initiateTopup(customerId: string, input: CreateTopupInput)
     topupId: topup.id,
     razorpayOrderId: rzpOrder.id,
     razorpayKeyId: env.RAZORPAY_KEY_ID ?? '',
-    amountPaise,
+    amountMinor,
+    currency,
   };
 }
 
@@ -79,7 +101,7 @@ export async function verifyTopup(customerId: string, input: VerifyTopupInput, d
   // Idempotent: already paid
   if (topup.status === 'paid') {
     const bal = await prisma.walletBalance.findUnique({ where: { customerId } });
-    return { alreadyCredited: true, balancePaise: bal?.balancePaise ?? 0 };
+    return { alreadyCredited: true, balanceMinor: bal?.balanceMinor ?? 0 };
   }
   // Reachable: the wallet webhook marks a top-up 'failed' on payment.failed (see
   // markTopupFailed). A failed top-up must never be credited by a later verify call.
@@ -98,8 +120,12 @@ export async function verifyTopup(customerId: string, input: VerifyTopupInput, d
       where: { id: topup.id },
       data: { status: 'paid', razorpayPaymentId: input.razorpayPaymentId },
     });
-    return { alreadyCredited: true, balancePaise: existing.balanceAfter };
+    return { alreadyCredited: true, balanceMinor: existing.balanceAfter };
   }
+
+  // Convert display-currency amount to USD cents before crediting the wallet
+  const rate = await getRateForCurrency(topup.currency);
+  const usdCentsToCredit = Math.round(topup.amountMinor / rate);
 
   // Mark topup as paid and credit wallet in one transaction
   const { newBalance, txId } = await prisma.$transaction(async (tx) => {
@@ -107,18 +133,18 @@ export async function verifyTopup(customerId: string, input: VerifyTopupInput, d
       where: { id: topup.id },
       data: { status: 'paid', razorpayPaymentId: input.razorpayPaymentId },
     });
-    return creditWallet(customerId, topup.amountPaise, 'topup', reference, { topupId: topup.id, tx });
+    return creditWallet(customerId, usdCentsToCredit, 'topup', reference, { topupId: topup.id, tx });
   });
 
   void emitNotificationEvent({
     type: 'wallet.topped_up',
     customerId,
-    amountPaise: topup.amountPaise,
+    amountMinor: usdCentsToCredit,
     walletTxId: txId,
-    newBalancePaise: newBalance,
+    newBalanceMinor: newBalance,
   });
 
-  return { alreadyCredited: false, balancePaise: newBalance };
+  return { alreadyCredited: false, balanceMinor: newBalance };
 }
 
 /**
@@ -160,17 +186,21 @@ export async function handleTopupWebhook(razorpayOrderId: string, razorpayPaymen
   }
 
   // Credit wallet and mark paid in a single transaction
+  // Convert display-currency amount to USD cents before crediting the wallet
+  const rate = await getRateForCurrency(topup.currency);
+  const usdCentsToCredit = Math.round(topup.amountMinor / rate);
+
   const { newBalance, txId } = await prisma.$transaction(async (tx) => {
     await tx.walletTopup.update({ where: { id: topup.id }, data: { status: 'paid', razorpayPaymentId } });
-    return creditWallet(topup.customerId, topup.amountPaise, 'topup', reference, { topupId: topup.id, tx });
+    return creditWallet(topup.customerId, usdCentsToCredit, 'topup', reference, { topupId: topup.id, tx });
   });
 
   void emitNotificationEvent({
     type: 'wallet.topped_up',
     customerId: topup.customerId,
-    amountPaise: topup.amountPaise,
+    amountMinor: usdCentsToCredit,
     walletTxId: txId,
-    newBalancePaise: newBalance,
+    newBalanceMinor: newBalance,
   });
 
   return { status: 'credited', newBalance };

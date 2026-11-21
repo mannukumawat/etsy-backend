@@ -1,7 +1,7 @@
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, HttpError } from '../../shared/errors/http-error.js';
 import { emitNotificationEvent } from '../../shared/events/notification-events.js';
-import { buildRateSnapshot } from '../../shared/utils/currency.js';
+import { buildRateSnapshot, convertFromBase } from '../../shared/utils/currency.js';
 import { adjustmentData } from '../../shared/utils/inventory-adjustments.js';
 import { emitLowStockIfCrossed } from '../inventory/low-stock-alert.js';
 import { guestTokenExpiry, hashGuestToken, newGuestToken } from '../orders/order-guest-token.service.js';
@@ -44,16 +44,16 @@ import { consumeHolds } from './stock-hold.service.js';
  * after an ownership + payload check (H1c) — see assertReplay below.
  */
 export async function placeOrder(input: PlaceOrderInput, customerId: string | null): Promise<PlaceOrderResult> {
-  const walletAmountPaise = input.walletAmountPaise ?? 0;
-  const walletPartialPaise = input.walletPartialPaise ?? 0;
-  const isFullWalletPayment = walletAmountPaise > 0 && input.paymentMethod === 'wallet';
-  const hasPartialWallet = walletPartialPaise > 0;
+  const walletAmountMinor = input.walletAmountMinor ?? 0;
+  const walletPartialMinor = input.walletPartialMinor ?? 0;
+  const isFullWalletPayment = walletAmountMinor > 0 && input.paymentMethod === 'wallet';
+  const hasPartialWallet = walletPartialMinor > 0;
 
   // Country-specific payments: UPI is India-only (enforced here and in create-order).
   assertPaymentMethodForCountry(input.paymentMethod, input.address.country);
 
-  if (walletAmountPaise > 0 && input.paymentMethod !== 'wallet') {
-    throw badRequest('walletAmountPaise is only for a full wallet payment. Use walletPartialPaise for a split wallet + card/UPI payment.', [{ path: 'walletAmountPaise', message: 'Not valid with this payment method.' }]);
+  if (walletAmountMinor > 0 && input.paymentMethod !== 'wallet') {
+    throw badRequest('walletAmountMinor is only for a full wallet payment. Use walletPartialMinor for a split wallet + card/UPI payment.', [{ path: 'walletAmountMinor', message: 'Not valid with this payment method.' }]);
   }
 
   if (isFullWalletPayment) {
@@ -66,7 +66,7 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
     // required unless the partial covers the whole total — that is only knowable after the
     // authoritative total is computed, so a missing proof is checked there, not here.
     if (!customerId) {
-      throw badRequest('You must be signed in to pay with your wallet.', [{ path: 'walletPartialPaise', message: 'Sign in required.' }]);
+      throw badRequest('You must be signed in to pay with your wallet.', [{ path: 'walletPartialMinor', message: 'Sign in required.' }]);
     }
   }
 
@@ -123,14 +123,14 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
 
   // Split-wallet resolution against the authoritative total. splitWalletPayment rejects a
   // partial above the total; a partial equal to the total is a full-wallet order.
-  const split = splitWalletPayment(totals.total, walletPartialPaise);
+  const split = splitWalletPayment(totals.total, walletPartialMinor);
   const isSplitWallet = split.isSplitWallet;
   const isFullWallet = isFullWalletPayment || split.isFullWallet;
 
   if (isFullWallet && hasPartialWallet && input.razorpayPaymentId) {
     // Contradictory request: the wallet already covers the whole total, yet a Razorpay
     // payment is also presented. Accepting it would charge the customer twice, so reject.
-    throw badRequest('Wallet payment already covers the order total. Do not include Razorpay payment details.', [{ path: 'walletPartialPaise', message: 'Covers the full total.' }]);
+    throw badRequest('Wallet payment already covers the order total. Do not include Razorpay payment details.', [{ path: 'walletPartialMinor', message: 'Covers the full total.' }]);
   }
 
   // M2: when the wallet covers the full total (including via a partial equal to the
@@ -148,45 +148,43 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
     // exactly the REMAINDER (total - wallet partial) and currency. Prevents a tampered flow
     // where a cheap external order is substituted — and, for split payments, prevents the
     // original overcharge where Razorpay was created for the full total.
-    await verifyRazorpayOrderAmount(input.razorpayOrderId, split.razorpayPaise, input.currency);
+    await verifyRazorpayOrderAmount(input.razorpayOrderId, split.razorpayMinor, input.currency);
     // H3: verify the CAPTURE itself — status 'captured' and amount/currency matching
     // the remainder. The order-amount check above cannot prove money moved.
-    await verifyCapturedPayment(input.razorpayPaymentId, split.razorpayPaise, input.currency);
+    await verifyCapturedPayment(input.razorpayPaymentId, split.razorpayMinor, input.currency);
   }
 
-  // Wallet amount validation (INR paise; only INR orders can pay by wallet).
-  // totals.total is already in minor units (paise for INR) — no conversion needed.
-  if (walletAmountPaise > 0) {
-    if (input.currency !== 'INR') {
-      throw badRequest('Wallet payment is only available for INR orders.', [{ path: 'walletAmountPaise', message: 'Non-INR currency.' }]);
-    }
+  // Wallet amount validation — wallet is in USD cents, order totals in display currency.
+  // Convert between the two using the pricing context's exchange rate.
+  if (walletAmountMinor > 0) {
     // Full-wallet payment must equal the total exactly — neither under- nor over-payment.
-    if (walletAmountPaise !== totals.total) {
+    if (walletAmountMinor !== totals.total) {
       throw badRequest(
-        `Full wallet payment must equal the order total of ₹${(totals.total / 100).toFixed(2)}.`,
-        [{ path: 'walletAmountPaise', message: 'Must equal the full order total.' }],
+        'Full wallet payment must equal the order total.',
+        [{ path: 'walletAmountMinor', message: 'Must equal the full order total.' }],
       );
     }
   }
   if (hasPartialWallet) {
-    if (input.currency !== 'INR') {
-      throw badRequest('Wallet payment is only available for INR orders.', [{ path: 'walletPartialPaise', message: 'Non-INR currency.' }]);
-    }
     // Validate against the customer's ACTUAL wallet balance from the DB — never trust the
     // client-sent amount. The debit inside the transaction re-checks atomically, so a
     // concurrent spend between this read and the debit still cannot overdraw.
-    const balancePaise = await getBalance(customerId!);
-    if (walletPartialPaise > balancePaise) {
+    const balanceUsdCents = await getBalance(customerId!);
+    // Convert wallet balance from USD cents to display currency for comparison
+    const balanceDisplayMinor = convertFromBase(balanceUsdCents, context.currency);
+    if (walletPartialMinor > balanceDisplayMinor) {
       throw badRequest(
-        `Insufficient wallet balance. Available: ₹${(balancePaise / 100).toFixed(2)}, requested from wallet: ₹${(walletPartialPaise / 100).toFixed(2)}.`,
-        [{ path: 'walletPartialPaise', message: 'Exceeds wallet balance.' }],
+        'Insufficient wallet balance.',
+        [{ path: 'walletPartialMinor', message: 'Exceeds wallet balance.' }],
       );
     }
   }
 
-  // Amount debited from the wallet inside the transaction: full total for a full-wallet
-  // order, the partial amount for a split order, 0 otherwise.
-  const walletDebitPaise = isFullWallet ? totals.total : isSplitWallet ? split.walletPaise : 0;
+  // Amount debited from the wallet inside the transaction (in display currency minor units).
+  // Will be converted to USD cents before the actual DB debit.
+  const walletDebitDisplayMinor = isFullWallet ? totals.total : isSplitWallet ? split.walletMinor : 0;
+  // Convert display minor → USD cents for the wallet debit
+  const walletDebitUsdCents = walletDebitDisplayMinor > 0 ? Math.round(walletDebitDisplayMinor / context.currency.rate) : 0;
 
   const rateSnapshot = buildRateSnapshot(context.allCurrencies);
 
@@ -340,11 +338,12 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
     // Wallet debit (full wallet payment, or the wallet leg of a split payment) for
     // signed-in customers. Runs inside the same transaction as the order, and debitWallet
     // itself refuses to overdraw atomically — so a concurrent spend cannot overdraw either.
+    // Wallet balance is in USD cents; walletDebitUsdCents is already converted.
     let walletTxId: string | null = null;
     let walletNewBalance: number | null = null;
-    if (walletDebitPaise > 0 && customerId) {
+    if (walletDebitUsdCents > 0 && customerId) {
       const walletRef = `spend:order:${created.id}`;
-      const walletResult = await debitWallet(customerId, walletDebitPaise, 'spend', walletRef, { orderId: created.id, tx });
+      const walletResult = await debitWallet(customerId, walletDebitUsdCents, 'spend', walletRef, { orderId: created.id, tx });
       walletTxId = walletResult.txId;
       walletNewBalance = walletResult.newBalance;
     }
@@ -389,7 +388,7 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
         await recordCapturedPayment({
           razorpayPaymentId: input.razorpayPaymentId,
           razorpayOrderId: input.razorpayOrderId ?? '',
-          amount: split.razorpayPaise,
+          amount: split.razorpayMinor,
           currency: input.currency,
           customerEmail: input.email.trim().toLowerCase(),
         }).catch(() => undefined);
@@ -415,15 +414,15 @@ export async function placeOrder(input: PlaceOrderInput, customerId: string | nu
     orderNumber: order.number,
     customerId: customerId,
     customerEmail: order.customerEmail,
-    totalPaise: order.total,
+    totalMinor: order.total,
     currency: order.currency,
   });
 
-  if (walletDebitPaise > 0 && customerId && walletTxId) {
+  if (walletDebitUsdCents > 0 && customerId && walletTxId) {
     void emitNotificationEvent({
       type: 'wallet.spend',
       customerId,
-      amountPaise: walletDebitPaise,
+      amountMinor: walletDebitUsdCents,
       walletTxId,
       orderId: order.id,
     });

@@ -14,18 +14,20 @@ const mocks = vi.hoisted(() => {
     topupRow: {
       id: 'top_1',
       customerId: 'cust_1',
-      amountPaise: 50000,
+      amountMinor: 50000,
+      currency: 'USD',
       razorpayOrderId: 'order_top1',
       razorpayPaymentId: null,
       status: 'pending',
     },
     prisma: {
       walletTopup: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(async () => ({ count: 0 })) },
-      walletBalance: { findUnique: vi.fn(async () => ({ balancePaise: 0 })) },
+      walletBalance: { findUnique: vi.fn(async () => ({ balanceMinor: 0 })) },
       walletTransaction: { findUnique: vi.fn(async () => null) },
+      currencyConfig: { findFirst: vi.fn(async () => ({ rate: 1 })) },
       $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
     },
-    fetchPayment: vi.fn(async () => ({ id: 'pay_1', amount: 50000, currency: 'INR', status: 'captured' })),
+    fetchPayment: vi.fn(async () => ({ id: 'pay_1', amount: 50000, currency: 'USD', status: 'captured' })),
     verifySignature: vi.fn(),
     creditWallet: vi.fn(async () => ({ newBalance: 50000, txId: 'wtx1' })),
   };
@@ -51,7 +53,7 @@ beforeEach(() => {
     return null;
   });
   prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(mocks.tx));
-  fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 50000, currency: 'INR', status: 'captured' });
+  fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 50000, currency: 'USD', status: 'captured' });
   creditWallet.mockResolvedValue({ newBalance: 50000, txId: 'wtx1' });
 });
 
@@ -60,19 +62,19 @@ const verifyInput = { topupId: 'top_1', razorpayPaymentId: 'pay_1', razorpaySign
 describe('verifyTopup — amount verification (H2)', () => {
   it('credits the wallet when the captured payment matches the top-up amount', async () => {
     const result = await verifyTopup('cust_1', verifyInput);
-    expect(result).toEqual({ alreadyCredited: false, balancePaise: 50000 });
+    expect(result).toEqual({ alreadyCredited: false, balanceMinor: 50000 });
     expect(fetchPayment).toHaveBeenCalledWith('pay_1');
     expect(creditWallet).toHaveBeenCalledWith('cust_1', 50000, 'topup', 'topup:top_1', expect.anything());
   });
 
   it('refuses to credit when the captured amount differs', async () => {
-    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 10000, currency: 'INR', status: 'captured' });
+    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 10000, currency: 'USD', status: 'captured' });
     await expect(verifyTopup('cust_1', verifyInput)).rejects.toThrow('amount does not match');
     expect(creditWallet).not.toHaveBeenCalled();
   });
 
   it('refuses to credit when the payment was not captured', async () => {
-    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 50000, currency: 'INR', status: 'authorized' });
+    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 50000, currency: 'USD', status: 'authorized' });
     await expect(verifyTopup('cust_1', verifyInput)).rejects.toThrow('not captured');
     expect(creditWallet).not.toHaveBeenCalled();
   });
@@ -116,7 +118,7 @@ describe('handleTopupWebhook — amount verification (H2)', () => {
   });
 
   it('does not credit when the webhook payment amount differs', async () => {
-    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 49999, currency: 'INR', status: 'captured' });
+    fetchPayment.mockResolvedValue({ id: 'pay_1', amount: 49999, currency: 'USD', status: 'captured' });
     await expect(handleTopupWebhook('order_top1', 'pay_1')).rejects.toThrow('amount does not match');
     expect(creditWallet).not.toHaveBeenCalled();
   });

@@ -26,15 +26,15 @@ const baseOrder = {
 
 describe('splitWalletPayment', () => {
   it('charges Razorpay only the remainder for a partial wallet payment', () => {
-    expect(splitWalletPayment(10000, 4000)).toEqual({ walletPaise: 4000, razorpayPaise: 6000, isFullWallet: false, isSplitWallet: true });
+    expect(splitWalletPayment(10000, 4000)).toEqual({ walletMinor: 4000, razorpayMinor: 6000, isFullWallet: false, isSplitWallet: true });
   });
 
   it('charges nothing to Razorpay when the partial equals the total (full wallet)', () => {
-    expect(splitWalletPayment(10000, 10000)).toEqual({ walletPaise: 10000, razorpayPaise: 0, isFullWallet: true, isSplitWallet: false });
+    expect(splitWalletPayment(10000, 10000)).toEqual({ walletMinor: 10000, razorpayMinor: 0, isFullWallet: true, isSplitWallet: false });
   });
 
   it('charges the full total to Razorpay when there is no wallet payment', () => {
-    expect(splitWalletPayment(10000, 0)).toEqual({ walletPaise: 0, razorpayPaise: 10000, isFullWallet: false, isSplitWallet: false });
+    expect(splitWalletPayment(10000, 0)).toEqual({ walletMinor: 0, razorpayMinor: 10000, isFullWallet: false, isSplitWallet: false });
   });
 
   it('rejects a partial wallet amount above the order total', () => {
@@ -48,30 +48,30 @@ describe('splitWalletPayment', () => {
 
 describe('placeOrderSchema wallet fields', () => {
   it('accepts a partial wallet payment with card/UPI', () => {
-    const parsed = placeOrderSchema.parse({ ...baseOrder, walletPartialPaise: 4000 });
-    expect(parsed.walletPartialPaise).toBe(4000);
+    const parsed = placeOrderSchema.parse({ ...baseOrder, walletPartialMinor: 4000 });
+    expect(parsed.walletPartialMinor).toBe(4000);
   });
 
   it('accepts a partial wallet amount equal to the total (normalised to full wallet at placement)', () => {
-    const parsed = placeOrderSchema.parse({ ...baseOrder, walletPartialPaise: 10000 });
-    expect(parsed.walletPartialPaise).toBe(10000);
+    const parsed = placeOrderSchema.parse({ ...baseOrder, walletPartialMinor: 10000 });
+    expect(parsed.walletPartialMinor).toBe(10000);
   });
 
   it('rejects a negative partial wallet amount', () => {
-    expect(() => placeOrderSchema.parse({ ...baseOrder, walletPartialPaise: -100 })).toThrow();
+    expect(() => placeOrderSchema.parse({ ...baseOrder, walletPartialMinor: -100 })).toThrow();
   });
 
   it('rejects both a full and a partial wallet amount in one order', () => {
-    expect(() => placeOrderSchema.parse({ ...baseOrder, walletAmountPaise: 5000, walletPartialPaise: 4000 })).toThrow(/either a full wallet payment or a partial/);
+    expect(() => placeOrderSchema.parse({ ...baseOrder, walletAmountMinor: 5000, walletPartialMinor: 4000 })).toThrow(/either a full wallet payment or a partial/);
   });
 
-  it('rejects a partial wallet amount with paymentMethod wallet (use walletAmountPaise instead)', () => {
-    expect(() => placeOrderSchema.parse({ ...baseOrder, paymentMethod: 'wallet', walletPartialPaise: 4000 })).toThrow();
+  it('rejects a partial wallet amount with paymentMethod wallet (use walletAmountMinor instead)', () => {
+    expect(() => placeOrderSchema.parse({ ...baseOrder, paymentMethod: 'wallet', walletPartialMinor: 4000 })).toThrow();
   });
 
   it('still accepts a full wallet payment without any partial', () => {
-    const parsed = placeOrderSchema.parse({ ...baseOrder, paymentMethod: 'wallet', walletAmountPaise: 10000 });
-    expect(parsed.walletAmountPaise).toBe(10000);
-    expect(parsed.walletPartialPaise).toBeUndefined();
+    const parsed = placeOrderSchema.parse({ ...baseOrder, paymentMethod: 'wallet', walletAmountMinor: 10000 });
+    expect(parsed.walletAmountMinor).toBe(10000);
+    expect(parsed.walletPartialMinor).toBeUndefined();
   });
 });

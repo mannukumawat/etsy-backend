@@ -7,11 +7,11 @@ export interface Buyer {
   email: string;
 }
 
-/** Wallet info included in the checkout totals preview for signed-in customers. */
+/** Wallet info included in the checkout totals preview for signed-in customers. Amounts in display currency minor units. */
 export interface WalletPreviewInfo {
-  balancePaise: number;
+  balanceMinor: number;
   /** Largest amount the customer can pay from their wallet for this specific order (min of balance and order total). */
-  maxApplicablePaise: number;
+  maxApplicableMinor: number;
 }
 
 export interface ResolvedLine {

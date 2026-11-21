@@ -20,14 +20,14 @@ adminWalletRouter.get(
     const { customerId } = req.params;
     const { page, pageSize } = walletTxListSchema.parse(req.query);
 
-    const [balancePaise, txResult] = await Promise.all([
+    const [balanceMinor, txResult] = await Promise.all([
       getBalance(customerId),
       listTransactions(customerId, page, pageSize),
     ]);
 
     res.json({
       customerId,
-      balancePaise,
+      balanceMinor,
       transactions: txResult,
     });
   }),
@@ -46,16 +46,16 @@ adminWalletRouter.post(
     const reference = `admin-adjust:${randomHexId(8)}`;
     const result =
       input.direction === 'credit'
-        ? await creditWallet(customerId, input.amountPaise, 'reversal', reference, { note: input.note })
-        : await debitWallet(customerId, input.amountPaise, 'reversal', reference, { note: input.note });
+        ? await creditWallet(customerId, input.amountMinor, 'reversal', reference, { note: input.note })
+        : await debitWallet(customerId, input.amountMinor, 'reversal', reference, { note: input.note });
     await recordAuditLog(prisma, {
       actor: req.owner!.email,
       action: `wallet.${input.direction}`,
       targetType: 'customer',
       targetId: customerId,
-      detail: `${input.direction === 'credit' ? 'Credited' : 'Debited'} ${input.amountPaise} paise (${reference}): ${input.note}`,
+      detail: `${input.direction === 'credit' ? 'Credited' : 'Debited'} ${input.amountMinor} cents USD (${reference}): ${input.note}`,
     });
-    res.json({ customerId, balancePaise: result.newBalance, txId: result.txId, reference });
+    res.json({ customerId, balanceMinor: result.newBalance, txId: result.txId, reference });
   }),
 );
 
@@ -74,7 +74,8 @@ adminWalletRouter.get(
         take: pageSize,
         select: {
           id: true,
-          amountPaise: true,
+          amountMinor: true,
+          currency: true,
           razorpayOrderId: true,
           razorpayPaymentId: true,
           status: true,

@@ -87,10 +87,10 @@ const schema = z.object({
 
   // --- Store Wallet -------------------------------------------------------------------------------
   // Top-up is disabled in production by default until the merchant confirms provider support.
-  // Set WALLET_TOPUP_ENABLED=true to enable. Amounts in INR paise.
+  // Set WALLET_TOPUP_ENABLED=true to enable. Amounts in USD cents.
   WALLET_TOPUP_ENABLED: z.string().default('false'),
-  WALLET_TOPUP_MIN_PAISE: z.coerce.number().int().positive().default(10000),   // ₹100
-  WALLET_TOPUP_MAX_PAISE: z.coerce.number().int().positive().default(1000000), // ₹10000
+  WALLET_TOPUP_MIN_CENTS: z.coerce.number().int().positive().default(500),    // $5.00
+  WALLET_TOPUP_MAX_CENTS: z.coerce.number().int().positive().default(100000), // $1000.00
 }).superRefine((data, ctx) => {
   // H10: in production the owner password must be explicitly set — the dev default must never
   // become a production back door. (The default still applies in dev/test so local setups keep

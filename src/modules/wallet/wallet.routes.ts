@@ -22,8 +22,8 @@ walletRouter.get(
   '/',
   route(async (req, res) => {
     const customerId = req.customer!.sub;
-    const balancePaise = await getBalance(customerId);
-    res.json({ balancePaise, topupEnabled: isWalletTopupEnabled });
+    const balanceMinor = await getBalance(customerId);
+    res.json({ balanceMinor, topupEnabled: isWalletTopupEnabled });
   }),
 );
 

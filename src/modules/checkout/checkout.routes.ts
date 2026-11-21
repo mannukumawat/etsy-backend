@@ -6,6 +6,7 @@ import { toStorefrontOrder } from '../orders/order.mapper.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { env } from '../../shared/config/env.js';
 import { badRequest } from '../../shared/errors/http-error.js';
+import { convertFromBase } from '../../shared/utils/currency.js';
 import { checkoutTotalsSchema, createRazorpayOrderSchema, placeOrderSchema, validateCouponSchema, type PlaceOrderInput } from './checkout.schema.js';
 import { computePreview, previewCheckoutTotals, validateCheckoutCoupon } from './checkout.service.js';
 import { placeOrder } from './order-placement.service.js';
@@ -46,7 +47,7 @@ checkoutRouter.post(
 
 /** Creates a Razorpay order whose amount is computed server-side from the checkout quote,
  *  so the client can never inflate or deflate the charge. For a split wallet payment the
- *  Razorpay order is created for the REMAINDER only (total - walletPartialPaise); the wallet
+ *  Razorpay order is created for the REMAINDER only (total - walletPartialMinor); the wallet
  *  leg is validated against the customer's real DB balance here and debited at order time.
  *  Returns the provider order id + the exact amount the customer will be charged, for
  *  display in the confirmation modal.
@@ -65,24 +66,25 @@ checkoutRouter.post('/razorpay/create-order', checkoutLimiter, route(async (req,
   }
   // Country-specific payments: UPI is India-only (also enforced in placeOrder).
   if (input.paymentMethod) assertPaymentMethodForCountry(input.paymentMethod, input.country);
-  const { totals } = await computePreview(
+  const { totals, context } = await computePreview(
     { lines: input.lines, currency: input.currency, country: input.country, region: input.region, shippingMethodId: input.shippingMethodId, couponCode: input.couponCode },
     req.customer?.sub ? `acct:${req.customer.sub}` : `guest:${String(req.body?.email ?? '').trim().toLowerCase()}`,
   );
-  const walletPartialPaise = input.walletPartialPaise ?? 0;
+  const walletPartialMinor = input.walletPartialMinor ?? 0;
   // splitWalletPayment rejects a partial above the total; partial === total is a full-wallet
   // order and must never reach Razorpay at all.
-  const split = splitWalletPayment(totals.total, walletPartialPaise);
-  if (walletPartialPaise > 0) {
-    if (input.currency !== 'INR') throw badRequest('Wallet payment is only available for INR orders.', [{ path: 'walletPartialPaise', message: 'Non-INR currency.' }]);
-    if (!req.customer?.sub) throw badRequest('You must be signed in to pay with your wallet.', [{ path: 'walletPartialPaise', message: 'Sign in required.' }]);
-    if (split.isFullWallet) throw badRequest('Wallet payment already covers the order total. Pay with your wallet instead of Razorpay.', [{ path: 'walletPartialPaise', message: 'Covers the full total.' }]);
-    const balancePaise = await getBalance(req.customer.sub);
-    if (walletPartialPaise > balancePaise) {
-      throw badRequest(`Insufficient wallet balance. Available: ₹${(balancePaise / 100).toFixed(2)}.`, [{ path: 'walletPartialPaise', message: 'Exceeds wallet balance.' }]);
+  const split = splitWalletPayment(totals.total, walletPartialMinor);
+  if (walletPartialMinor > 0) {
+    if (!req.customer?.sub) throw badRequest('You must be signed in to pay with your wallet.', [{ path: 'walletPartialMinor', message: 'Sign in required.' }]);
+    if (split.isFullWallet) throw badRequest('Wallet payment already covers the order total. Pay with your wallet instead of Razorpay.', [{ path: 'walletPartialMinor', message: 'Covers the full total.' }]);
+    const balanceUsdCents = await getBalance(req.customer.sub);
+    // Convert wallet USD balance to display currency for comparison
+    const balanceDisplayMinor = convertFromBase(balanceUsdCents, context.currency);
+    if (walletPartialMinor > balanceDisplayMinor) {
+      throw badRequest(`Insufficient wallet balance.`, [{ path: 'walletPartialMinor', message: 'Exceeds wallet balance.' }]);
     }
   }
-  const order = await createRazorpayOrder(split.razorpayPaise, input.currency, receipt);
+  const order = await createRazorpayOrder(split.razorpayMinor, input.currency, receipt);
   // Persist the Razorpay order (L4): binds the gateway order to the server-computed
   // amount/currency and to the requester. placeOrder marks it 'paid' on success.
   const customerKey = req.customer?.sub ? `acct:${req.customer.sub}` : `guest:${String(req.body?.email ?? '').trim().toLowerCase()}`;

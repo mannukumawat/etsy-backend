@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 export const createTopupSchema = z.object({
-  amountPaise: z.number().int('Must be an integer.').positive('Amount must be positive.'),
+  amountMinor: z.number().int('Must be an integer.').positive('Amount must be positive.'),
+  currency: z.string().length(3, 'Must be a 3-letter ISO 4217 code.').toUpperCase(),
 });
 export type CreateTopupInput = z.infer<typeof createTopupSchema>;
 
@@ -24,7 +25,7 @@ export type WalletTxListInput = z.infer<typeof walletTxListSchema>;
  *  so it is auditable in the transaction history. */
 export const adminWalletAdjustSchema = z.object({
   direction: z.enum(['credit', 'debit']),
-  amountPaise: z.number().int('Must be an integer.').positive('Amount must be positive.').max(100_000_000),
+  amountMinor: z.number().int('Must be an integer.').positive('Amount must be positive.').max(100_000_000),
   note: z.string().trim().min(3, 'Add a short reason (at least 3 characters).').max(300),
 });
 export type AdminWalletAdjustInput = z.infer<typeof adminWalletAdjustSchema>;
