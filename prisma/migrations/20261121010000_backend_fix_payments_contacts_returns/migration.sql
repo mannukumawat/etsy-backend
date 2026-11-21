@@ -15,12 +15,20 @@
 -- Razorpay payment id with a UNIQUE constraint (one gateway payment funds at most
 -- one order). Legacy "" values become NULL first (MySQL unique indexes ignore NULLs,
 -- so several legacy rows may stay NULL).
-ALTER TABLE `orders` ADD COLUMN `razorpayOrderId` VARCHAR(255) NULL;
-UPDATE `orders` SET `paymentReference` = NULL WHERE `paymentReference` = '';
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'razorpayOrderId');
+SET @ddl = IF(@col_exists = 0, 'ALTER TABLE `orders` ADD COLUMN `razorpayOrderId` VARCHAR(255) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 ALTER TABLE `orders` MODIFY `paymentReference` VARCHAR(255) NULL;
-CREATE UNIQUE INDEX `orders_paymentReference_key` ON `orders` (`paymentReference`);
-CREATE INDEX `orders_razorpayOrderId_idx` ON `orders` (`razorpayOrderId`);
-CREATE INDEX `orders_fulfilmentStatus_idx` ON `orders` (`fulfilmentStatus`);
+UPDATE `orders` SET `paymentReference` = NULL WHERE `paymentReference` = '';
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'orders_paymentReference_key');
+SET @ddl = IF(@idx_exists = 0, 'CREATE UNIQUE INDEX `orders_paymentReference_key` ON `orders` (`paymentReference`)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'orders_razorpayOrderId_idx');
+SET @ddl = IF(@idx_exists = 0, 'CREATE INDEX `orders_razorpayOrderId_idx` ON `orders` (`razorpayOrderId`)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'orders_fulfilmentStatus_idx');
+SET @ddl = IF(@idx_exists = 0, 'CREATE INDEX `orders_fulfilmentStatus_idx` ON `orders` (`fulfilmentStatus`)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 2. Returns / exchanges / refunds tables (same definitions as the deleted one-shot
 -- scripts, so existing dev data keeps working).
@@ -232,12 +240,15 @@ DELETE c1 FROM `coupon_redemptions` c1
 INNER JOIN `coupon_redemptions` c2
   ON c1.`couponId` = c2.`couponId` AND c1.`customerKey` = c2.`customerKey`
   AND (c1.`createdAt` > c2.`createdAt` OR (c1.`createdAt` = c2.`createdAt` AND c1.`id` > c2.`id`));
-DROP INDEX `coupon_redemptions_couponId_customerKey_idx` ON `coupon_redemptions`;
-CREATE UNIQUE INDEX `coupon_redemptions_couponId_customerKey_key` ON `coupon_redemptions` (`couponId`, `customerKey`);
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coupon_redemptions' AND INDEX_NAME = 'coupon_redemptions_couponId_customerKey_key');
+SET @ddl = IF(@idx_exists = 0, 'CREATE UNIQUE INDEX `coupon_redemptions_couponId_customerKey_key` ON `coupon_redemptions` (`couponId`, `customerKey`)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 9. Product search: FULLTEXT index on the search haystack (M7). The service switches
 -- from LIKE '%q%' to MATCH ... AGAINST in boolean mode.
-CREATE FULLTEXT INDEX `products_searchText_idx` ON `products` (`searchText`);
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products' AND INDEX_NAME = 'products_searchText_idx');
+SET @ddl = IF(@idx_exists = 0, 'CREATE FULLTEXT INDEX `products_searchText_idx` ON `products` (`searchText`)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 10. Razorpay orders created at checkout (L4): binds the gateway order to the
 -- server-computed amount/currency and the requester; the receipt is the idempotency
