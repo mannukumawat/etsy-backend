@@ -3,7 +3,7 @@ import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
 import { toAdminMedia } from './media.mapper.js';
 import { mediaUploadSchema, mediaUrlImportSchema } from './media.schema.js';
-import { importMediaFromUrl, listMedia, uploadMedia } from './media.service.js';
+import { importMediaFromUrl, deleteMedia, listMedia, uploadMedia } from './media.service.js';
 
 export const adminMediaRouter = Router();
 // Every route below requires the owner — including GET, which exposes the full upload inventory
@@ -34,5 +34,13 @@ adminMediaRouter.post(
     const input = mediaUrlImportSchema.parse(req.body);
     const row = await importMediaFromUrl(input);
     res.status(201).json(toAdminMedia(row));
+  }),
+);
+
+adminMediaRouter.delete(
+  '/:id',
+  route(async (req, res) => {
+    await deleteMedia(req.params.id);
+    res.json({ ok: true });
   }),
 );

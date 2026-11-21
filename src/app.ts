@@ -1,7 +1,11 @@
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
+import { assertRequiredTables } from './shared/database/schema-check.js';
+import { registerNotificationEventHandler } from './shared/events/notification-events.js';
+import { handleNotificationEvent } from './modules/notifications/notification.service.js';
 import { attachOwner, requireOwner } from './shared/middleware/auth.middleware.js';
 import { requireCsrf } from './shared/middleware/csrf.middleware.js';
 import { attachCustomer } from './shared/middleware/customer-auth.middleware.js';
@@ -10,6 +14,8 @@ import { env } from './shared/config/env.js';
 import { errorHandler } from './shared/http/error-handler.js';
 import { notFound } from './shared/errors/http-error.js';
 import { route } from './shared/http/async-route.js';
+import { createHealthRouter } from './shared/observability/health.js';
+import { requestId, requestLogger } from './shared/observability/request-logging.js';
 import { publicApiLimiter } from './shared/middleware/rate-limit.middleware.js';
 import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes.js';
 import { categoryRouter } from './modules/categories/category.routes.js';
@@ -19,6 +25,7 @@ import { publicContentRouter } from './modules/content/content.routes.js';
 import { adminCustomersRouter } from './modules/customers/admin-customer.routes.js';
 import { adminDashboardRouter } from './modules/dashboard/dashboard.routes.js';
 import { adminOrdersRouter } from './modules/orders/admin-order.routes.js';
+import { paymentRecoveryRouter } from './modules/orders/payment-recovery.routes.js';
 import { checkoutRouter } from './modules/checkout/checkout.routes.js';
 import { orderTrackRouter } from './modules/orders/order.routes.js';
 import { collectionsRouter } from './modules/collections/admin-collection.routes.js';
@@ -36,6 +43,7 @@ import { mediaRouter } from './modules/media/media.routes.js';
 import { storefrontCategoryRouter } from './modules/categories/storefront-category.routes.js';
 import { storefrontProductRouter } from './modules/products/storefront-product.routes.js';
 import { contactRouter } from './modules/contacts/contact.routes.js';
+import { newsletterRouter } from './modules/newsletter/newsletter.routes.js';
 import { publicReviewsRouter } from './modules/reviews/review.routes.js';
 import { customerReviewsRouter } from './modules/reviews/customer-review.routes.js';
 import { adminReviewsRouter } from './modules/reviews/admin-review.routes.js';
@@ -51,7 +59,6 @@ import { customerBankAccountsRouter } from './modules/bank-accounts/bank-account
 import { customerUpiRouter } from './modules/bank-accounts/upi.routes.js';
 import { adminExchangesRouter } from './modules/exchanges/admin-exchange.routes.js';
 import { translationsRouter } from './modules/translations/translation.routes.js';
-import { uiI18nAdminRouter } from './modules/ui-i18n/admin-ui-i18n.routes.js';
 import { uiI18nPublicRouter } from './modules/ui-i18n/ui-i18n.routes.js';
 import { stripHindiResponses, translateResponses } from './modules/translations/translation.middleware.js';
 import { settingsRouter } from './modules/settings/admin-settings.routes.js';
@@ -62,14 +69,38 @@ import { cronNotificationsRouter } from './modules/notifications/cron-notificati
 import { walletRouter } from './modules/wallet/wallet.routes.js';
 import { adminWalletRouter } from './modules/wallet/admin-wallet.routes.js';
 import { handleWalletRazorpayWebhook } from './modules/wallet/webhook.handler.js';
+import { handleOrderRazorpayWebhook } from './modules/checkout/order-webhook.handler.js';
+
+/** Minimum response size worth compressing (M17). The `compression` package only
+ *  gzips JSON responses above this size when the client sends Accept-Encoding: gzip. */
+const COMPRESSION_MIN_BYTES = 1024;
+
+/** The boot schema check runs once per instance: /health stays a cheap probe afterwards. */
+let schemaChecked = false;
 
 export function createApp() {
   const app = express();
+
+  // M19: request IDs + structured request logging go first, so every request —
+  // including ones rejected later by auth or rate limiting — is logged once with
+  // its ID. The health probes are mounted before the public-API rate limiter for
+  // the same reason: a probe must never be throttled by what it is probing.
+  app.use(requestId);
+  app.use(requestLogger);
+  app.use('/api/health', createHealthRouter({ checkDatabase: assertDatabaseReachable }));
 
   // Only meaningful when actually deployed behind a reverse proxy/load balancer — see the TRUST_PROXY
   // comment in env.ts. Must be set deliberately: trusting X-Forwarded-For with no real proxy in front
   // lets any client spoof their apparent IP and dodge the per-IP rate limiters below.
   app.set('trust proxy', env.trustProxy);
+  // L5: Express defaults to weak ETags; stating it here makes the caching contract explicit
+  // instead of relying on a framework default nobody remembers.
+  app.set('etag', 'weak');
+
+  // C7: the notification event handler must live in createApp, not only in server.ts —
+  // the Vercel entrypoint (api/index.ts) only calls createApp(), so without this every
+  // emitted notification event was silently dropped in production (no inbox, no push).
+  registerNotificationEventHandler(handleNotificationEvent);
 
   app.use(
     helmet({
@@ -99,18 +130,28 @@ export function createApp() {
       credentials: true,
     }),
   );
+  // M17: gzip JSON responses over 1 KB. (Vercel's edge may also compress, but that is
+  // not verified from source — the app compresses its own responses either way.)
+  app.use(compression({ threshold: COMPRESSION_MIN_BYTES }));
   // Serve frequently-read public catalogue/content from Vercel's edge after the first request.
   // This avoids paying a serverless cold start and database round trip on every page navigation.
+  // M20: the currency cron path is excluded (a cron response must never be served from the
+  // edge cache), and the window is short (30 s cache, 60 s stale-while-revalidate).
+  // NOTE: there is no edge purge on product/settings save — purging needs a Vercel API
+  // token, which this project does not have, so app code cannot invalidate the edge
+  // cache; stale catalogue data ages out within the window above instead.
   app.use((req, res, next) => {
     const cacheablePublicGet =
       req.method === 'GET' &&
+      !req.path.startsWith('/api/settings/cron/') &&
       /^\/api\/(products|categories|settings|content|help|i18n|nav-links|item-groups|collections)(\/|$)/.test(req.path);
-    if (cacheablePublicGet) res.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+    if (cacheablePublicGet) res.set('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=60');
     next();
   });
   // Raw-body webhooks MUST be mounted before express.json() — once express.json() runs the Buffer
   // is gone and signature verification against the raw body is impossible.
   app.post('/api/webhooks/wallet/razorpay', express.raw({ type: 'application/json' }), route(handleWalletRazorpayWebhook));
+  app.post('/api/webhooks/orders/razorpay', express.raw({ type: 'application/json' }), route(handleOrderRazorpayWebhook));
 
   // Image uploads arrive as base64 JSON, so allow a larger body than the default 100kb.
   app.use(express.json({ limit: '12mb' }));
@@ -128,6 +169,12 @@ export function createApp() {
     '/health',
     route(async (_req, res) => {
       await assertDatabaseReachable();
+      // Boot schema check (C9): fail loudly if a required table is missing, but only
+      // once per instance — /health is probed often and must stay cheap.
+      if (!schemaChecked) {
+        await assertRequiredTables();
+        schemaChecked = true;
+      }
       res.json({ ok: true, service: 'your-store-backend', env: env.NODE_ENV, time: new Date().toISOString() });
     }),
   );
@@ -141,6 +188,9 @@ export function createApp() {
   // below handles (those answer 401, not 404, to anonymous callers).
   app.use('/api/admin', requireOwner);
   app.use('/api/admin/categories', categoryRouter);
+  // Import/export mounts BEFORE productRouter: its GET /products/template and /products/export
+  // would otherwise be swallowed by productRouter.get('/:id') (id='template'/'export' -> 404).
+  app.use('/api/admin', importExportRouter);
   app.use('/api/admin/products', productRouter);
   app.use('/api/admin/media', adminMediaRouter);
   app.use('/api/admin/settings', settingsRouter);
@@ -148,6 +198,7 @@ export function createApp() {
   app.use('/api/admin/content', contentRouter);
   app.use('/api/admin/coupons', couponsRouter);
   app.use('/api/admin/orders', adminOrdersRouter);
+  app.use('/api/admin/payment-recoveries', paymentRecoveryRouter);
   app.use('/api/admin/customers', adminCustomersRouter);
   app.use('/api/admin/dashboard', adminDashboardRouter);
   app.use('/api/admin/nav-links', navLinksRouter);
@@ -162,8 +213,6 @@ export function createApp() {
   app.use('/api/admin/help', adminHelpRouter);
   app.use('/api/help', publicHelpRouter);
   app.use('/api/admin/translations', translationsRouter);
-  app.use('/api/admin/i18n', uiI18nAdminRouter);
-  app.use('/api/admin', importExportRouter);
   app.use('/api/settings', publicSettingsRouter);
   app.use('/api/content', publicContentRouter);
   app.use('/api/customer/auth', customerAuthRouter);
@@ -186,6 +235,7 @@ export function createApp() {
   app.use('/api', storefrontCategoryRouter);
   app.use('/api', storefrontProductRouter);
   app.use('/api', contactRouter);
+  app.use('/api', newsletterRouter);
 
   app.use((_req, _res, next) => next(notFound('No such endpoint.')));
   app.use(errorHandler);

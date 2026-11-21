@@ -53,7 +53,7 @@ export function toAdminSettings(s: {
   const { store, shipping, tax, currencies } = s;
   return {
     store: toAdminStoreSettings(store),
-    shipping: { zones: shipping.zones.map(toAdminShippingZone), unsupportedMessage: { en: shipping.unsupportedMessageEn, hi: shipping.unsupportedMessageHi }, updatedAt: shipping.updatedAt.toISOString() },
+    shipping: { zones: shipping.zones.map(toAdminShippingZone), unsupportedMessage: { en: shipping.unsupportedMessageEn, hi: shipping.unsupportedMessageHi }, freeShippingThreshold: shipping.freeShippingThreshold ?? null, updatedAt: shipping.updatedAt.toISOString() },
     tax: { pricesIncludeTax: tax.pricesIncludeTax, defaultRate: tax.defaultRate, rules: tax.rules.map(toAdminTaxRule), updatedAt: tax.updatedAt.toISOString() },
     currencies: { base: currencies.base, currencies: currencies.currencies.map(toAdminCurrencyConfig), ratesUpdatedAt: currencies.ratesUpdatedAt.toISOString(), autoSyncAt: currencies.autoSyncAt ? currencies.autoSyncAt.toISOString() : null, autoSyncError: currencies.autoSyncError, updatedAt: currencies.updatedAt.toISOString() },
   };
@@ -61,18 +61,30 @@ export function toAdminSettings(s: {
 
 /** A safe subset for display: store identity/contact, enabled currencies for the currency switcher,
  *  language configuration, and illustrative shipping rates/times (the same non-sensitive numbers the
- *  storefront already bundled statically) so the shipping info page can show live admin-edited rates. */
+ *  storefront already bundled statically) so the shipping info page can show live admin-edited rates.
+ *  The logo is served as a resolvable URL (H1): the id alone was unusable — no consumer could
+ *  turn it into an image. `logoUrl` prefers the Cloudinary URL when the media lives there. */
 export function toPublicSettings(s: {
   store: StoreSettings;
   currencies: CurrencySettings & { currencies: CurrencyConfig[] };
   shipping: ShippingSettings & { zones: ShippingZone[] };
+  logoUrl?: string | null;
+  /** L-S8: live shop-profile stats, computed by getPublicSettings from reviews/orders. */
+  stats?: { rating: number; reviewCount: number; salesCount: number } | null;
 }) {
   const { store, currencies, shipping } = s;
+  const location = store.contactAddress.trim();
   return {
     store: {
       name: store.nameEn,
       tagline: { en: store.taglineEn, ...(store.taglineHi ? { hi: store.taglineHi } : {}) },
-      logo: store.logoId ? { id: store.logoId } : null,
+      logo: store.logoId ? { id: store.logoId, ...(s.logoUrl ? { url: s.logoUrl } : {}) } : null,
+      // L-S8: the storefront's shop profile reads `store.location` / `store.stats`
+      // and they were never returned, so both were always undefined. Location is
+      // the contact address the owner already maintains; stats are computed live
+      // (see getPublicSettings) — no new settings fields were invented for them.
+      ...(location ? { location } : {}),
+      ...(s.stats ? { stats: s.stats } : {}),
       contact: {
         email: store.contactEmail,
         phone: store.contactPhone,
@@ -80,11 +92,17 @@ export function toPublicSettings(s: {
         hours: { en: store.contactHoursEn },
       },
       social: { instagram: store.socialInstagram, pinterest: store.socialPinterest, facebook: store.socialFacebook, youtube: store.socialYoutube },
+      // M-S1: published so the storefront can stop hardcoding the delivery window
+      // and the per-line quantity cap (frontend config/store.ts + utils/dates.ts).
+      handlingDays: { min: store.handlingMinDays, max: store.handlingMaxDays },
+      maxQtyPerLine: store.maxQtyPerLine,
     },
     currencies: currencies.currencies.map((c) => ({ code: c.code, name: c.name, rate: c.rate, fractionDigits: c.fractionDigits, roundingIncrement: c.roundingIncrement })),
     shipping: {
       zones: shipping.zones.map(toAdminShippingZone),
       unsupportedMessage: { en: shipping.unsupportedMessageEn },
+      // M-S2: USD minor units (null = no threshold); the storefront converts it like any price.
+      freeShippingThreshold: shipping.freeShippingThreshold ?? null,
     },
   };
 }

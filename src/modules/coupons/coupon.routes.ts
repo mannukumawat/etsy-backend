@@ -10,10 +10,15 @@ couponsRouter.use(requireOwner);
 
 couponsRouter.get(
   '/',
-  route(async (_req, res) => {
-    const rows = await listCoupons();
+  route(async (req, res) => {
+    // M-O14: server pagination + search/state filter (was: whole list, client-filtered).
+    const q = String(req.query.q ?? '').trim();
+    const state = String(req.query.state ?? '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+    const result = await listCoupons({ q, state, page, pageSize });
     const now = new Date();
-    res.json({ items: rows.map((r) => toAdminCouponWithState(r, now)) });
+    res.json({ ...result, items: result.items.map((r) => toAdminCouponWithState(r, now)) });
   }),
 );
 

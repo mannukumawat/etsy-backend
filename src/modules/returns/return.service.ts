@@ -1,14 +1,78 @@
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, notFound } from '../../shared/errors/http-error.js';
 import { randomHexId } from '../../shared/utils/ids.js';
-import { fetchReturnWithDetails } from './return.repository.js';
+import { fetchReturnWithDetails, toReturnRequestRow } from './return.repository.js';
 import type { CreateReturnInput } from './return.schema.js';
-import type { ReturnRequestRow } from './return.types.js';
 
-// Customer-side return requests. Raw SQL throughout: the return tables live outside the Prisma model
-// (created by migrate-returns.ts).
+// Customer-side return requests, backed by the Prisma ReturnRequest / ReturnEvent
+// models (see prisma/schema.prisma). The create / withdraw sequences run inside a
+// transaction, so a mid-sequence failure can never leave a reserved quantity
+// without a request, or vice versa (H15).
 
 function generateReturnRef() { return 'RET-' + randomHexId(4).toUpperCase(); }
+
+/** Last-resort window when neither the order line nor the product states one. */
+export const DEFAULT_RETURN_WINDOW_DAYS = 7;
+
+export interface DeliveryWindowInput {
+  /** When the line itself was delivered (written when the order advances to delivered). */
+  deliveredAt: Date | null;
+  /** Fallback: the order's `delivered` event timestamp. */
+  deliveredEventAt: Date | null;
+  /** Per-line window override in days. */
+  lineWindowDays: number | null;
+  /** Product-level default window in days. */
+  productReturnDays: number | null;
+}
+
+/**
+ * Resolves the return / exchange window. Precedence for the length: the line's
+ * override, then the product's returnDays, then the documented 7-day last resort.
+ * The window always starts at the delivery timestamp — never at order.updatedAt,
+ * which moves on any order write (M4).
+ */
+export function resolveDeliveryWindow(input: DeliveryWindowInput): { windowDays: number; deliveredAt: Date | null } {
+  const windowDays = input.lineWindowDays ?? input.productReturnDays ?? DEFAULT_RETURN_WINDOW_DAYS;
+  return { windowDays, deliveredAt: input.deliveredAt ?? input.deliveredEventAt };
+}
+
+/**
+ * Throws 409 when the delivery window has closed. When no delivery timestamp is
+ * on record at all (orders delivered before delivery dates were tracked), the
+ * window cannot be enforced, so the request is allowed rather than blocking a
+ * legitimate return for a legacy order.
+ */
+export function assertWithinDeliveryWindow(
+  window: { windowDays: number; deliveredAt: Date | null },
+  noun = 'return',
+): void {
+  if (!window.deliveredAt) return;
+  const deadlineMs = window.deliveredAt.getTime() + window.windowDays * 24 * 60 * 60 * 1000;
+  if (Date.now() > deadlineMs) {
+    throw conflict(`The ${window.windowDays}-day ${noun} window for this item has closed.`);
+  }
+}
+
+/**
+ * The order's delivery timestamp from its event timeline. Orders record delivery
+ * as a `fulfilment` event with the message `delivered: Delivered.` (see
+ * advanceOrder in order.service.ts); a plain `delivered` event type is accepted
+ * too, so either shape yields the timestamp. Never order.updatedAt.
+ */
+export async function findDeliveredEventAt(orderId: string): Promise<Date | null> {
+  const event = await prisma.orderEvent.findFirst({
+    where: {
+      orderId,
+      OR: [
+        { type: 'delivered' },
+        { type: 'fulfilment', message: { startsWith: 'delivered:' } },
+      ],
+    },
+    orderBy: { at: 'asc' },
+    select: { at: true },
+  });
+  return event?.at ?? null;
+}
 
 /**
  * Allocates the amount the customer actually paid across order lines. This includes the line's
@@ -27,15 +91,32 @@ export function calculateRefundableAmount(input: {
   return Math.min(input.orderTotal, Math.round((input.orderTotal * lineShare) / input.orderSubtotal));
 }
 
+/** Shared quantity guard: the requested units must fit in what is still eligible and not already covered by a pending return. */
+export function assertReturnableQty(input: {
+  quantity: number;
+  cancelledQty: number;
+  returnedQty: number;
+  pendingQty: number;
+  qty: number;
+}): void {
+  const eligibleQty = input.quantity - input.cancelledQty - input.returnedQty;
+  if (input.qty > eligibleQty) {
+    throw badRequest(`Cannot return ${input.qty} — only ${eligibleQty} eligible units remain.`);
+  }
+  if (input.pendingQty + input.qty > eligibleQty) {
+    throw conflict(`Only ${eligibleQty - input.pendingQty} units are not already covered by a pending return.`);
+  }
+}
+
 async function loadReturnForCustomer(ref: string, customerId: string) {
-  const rows = await prisma.$queryRawUnsafe<ReturnRequestRow[]>(
-    `SELECT rr.* FROM return_requests rr
-     JOIN orders o ON o.id = rr.order_id
-     WHERE rr.reference = ? AND o.customerId = ? AND o.customerKind = 'account'`,
-    ref, customerId,
-  );
-  if (!rows[0]) throw notFound('Return request not found.');
-  return rows[0];
+  const row = await prisma.returnRequest.findUnique({ where: { reference: ref } });
+  if (!row) throw notFound('Return request not found.');
+  const order = await prisma.order.findFirst({
+    where: { id: row.orderId, customerId, customerKind: 'account' },
+    select: { id: true },
+  });
+  if (!order) throw notFound('Return request not found.');
+  return toReturnRequestRow(row);
 }
 
 /** Creates a return request for a delivered order line and reserves the returned quantity. */
@@ -50,127 +131,147 @@ export async function requestReturn(customerId: string, input: CreateReturnInput
   }
 
   // Load line
-  const lines = await prisma.$queryRawUnsafe<Array<{
-    id: string; variant_id: string; quantity: number; cancelled_qty: number;
-    returned_qty: number; delivered_at: Date | null; return_window_days: number | null;
-    unit_price: number; line_total: number; name_en: string; product_id: string;
-  }>>(
-    `SELECT id, variantId AS variant_id, quantity, cancelled_qty, returned_qty, delivered_at, return_window_days,
-              unitPrice AS unit_price, lineTotal AS line_total, nameEn AS name_en, productId AS product_id
-       FROM order_lines WHERE id = ? AND orderId = ?`,
-    input.lineId, input.orderId,
-  );
-  const line = lines[0];
-  if (!line) throw notFound('Order line not found.');
+  const line = await prisma.orderLine.findUnique({ where: { id: input.lineId } });
+  if (!line || line.orderId !== input.orderId) throw notFound('Order line not found.');
 
-  // Quantity check
-  const cancelledQty = line.cancelled_qty ?? 0;
-  const returnedQty = line.returned_qty ?? 0;
-  const eligibleQty = line.quantity - cancelledQty - returnedQty;
-  if (input.qty > eligibleQty) {
-    throw badRequest(`Cannot return ${input.qty} — only ${eligibleQty} eligible units remain.`);
-  }
-
-  // Check for existing active return on same line covering the requested qty
-  const activeReturns = await prisma.$queryRawUnsafe<Array<{ requested_qty: number }>>(
-    `SELECT requested_qty FROM return_requests
-       WHERE order_line_id = ? AND status NOT IN ('rejected','withdrawn','closed')`,
-    input.lineId,
-  );
-  const pendingQty = activeReturns.reduce((s, r) => s + r.requested_qty, 0);
-  if (pendingQty + input.qty > eligibleQty) {
-    throw conflict(`Only ${eligibleQty - pendingQty} units are not already covered by a pending return.`);
-  }
-
-  // Return window: use line-level override if set, else product returnDays, else 7-day default
-  const windowDays = line.return_window_days ?? 7;
-
-  // Delivered-at check: use line.delivered_at if set; otherwise fall back to order.updatedAt as proxy
-  const deliveredAt = line.delivered_at ?? order.updatedAt;
-  const deadlineMs = new Date(deliveredAt).getTime() + windowDays * 24 * 60 * 60 * 1000;
-  if (Date.now() > deadlineMs) {
-    throw conflict(`The ${windowDays}-day return window for this item has closed.`);
-  }
-
-  // Check product returnsAllowed
-  const product = await prisma.$queryRawUnsafe<Array<{ returns_allowed: number }>>(
-    `SELECT COALESCE(returnsAllowed, 1) AS returns_allowed FROM products WHERE id = ?`,
-    line.product_id,
-  );
-  if (product[0] && product[0].returns_allowed === 0) {
+  // Return window: line override, else the product's returnDays, else the 7-day default —
+  // measured from the line's deliveredAt, falling back to the order's delivered event.
+  const product = await prisma.product.findUnique({
+    where: { id: line.productId },
+    select: { returnsAllowed: true, returnDays: true },
+  });
+  if (product && !product.returnsAllowed) {
     throw conflict('This product is not eligible for returns.');
   }
+  const deliveredEventAt = line.deliveredAt ? null : await findDeliveredEventAt(input.orderId);
+  const window = resolveDeliveryWindow({
+    deliveredAt: line.deliveredAt,
+    deliveredEventAt,
+    lineWindowDays: line.returnWindowDays,
+    productReturnDays: product?.returnDays ?? null,
+  });
+  assertWithinDeliveryWindow(window, 'return');
+
+  // Quantity check (early, customer-facing); re-validated inside the transaction below.
+  const activeReturns = await prisma.returnRequest.findMany({
+    where: { orderLineId: input.lineId, status: { notIn: ['rejected', 'withdrawn', 'closed'] } },
+    select: { requestedQty: true },
+  });
+  const pendingQty = activeReturns.reduce((s: number, r: { requestedQty: number }) => s + r.requestedQty, 0);
+  assertReturnableQty({
+    quantity: line.quantity,
+    cancelledQty: line.cancelledQty,
+    returnedQty: line.returnedQty,
+    pendingQty,
+    qty: input.qty,
+  });
 
   // Refund the requested units' share of what was actually paid, including tax/shipping and any
   // order-level discount. For a single-line full return this is exactly order.total.
   const refundableAmount = calculateRefundableAmount({
     orderTotal: order.total,
     orderSubtotal: order.subtotal,
-    lineTotal: line.line_total,
+    lineTotal: line.lineTotal,
     lineQuantity: line.quantity,
     requestedQuantity: input.qty,
   });
+
+  // Validate refund account ownership if provided (C9: refund_account_id is a real
+  // column on the Prisma ReturnRequest model, written through the model below).
+  if (input.refundAccountId) {
+    const acct = await prisma.customerBankAccount.findFirst({
+      where: { id: input.refundAccountId, customerId, isActive: true },
+      select: { id: true },
+    });
+    if (!acct) {
+      throw badRequest('Refund bank account not found or does not belong to you.');
+    }
+  }
 
   const id = randomHexId(12);
   const reference = generateReturnRef();
   const photosJson = JSON.stringify(input.photos ?? []);
 
-  // Validate refund account ownership if provided
-  if (input.refundAccountId) {
-    const acctRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-      `SELECT id FROM customer_bank_accounts WHERE id = ? AND customer_id = ? AND is_active = 1`,
-      input.refundAccountId, customerId,
-    );
-    if (!acctRows[0]) {
-      throw badRequest('Refund bank account not found or does not belong to you.');
-    }
-  }
+  // One transaction: the request, the quantity reservation, the timeline event and
+  // the order event land together. The quantity guard is re-checked here against
+  // the freshly read line, so two concurrent requests cannot over-reserve.
+  await prisma.$transaction(async (tx: any) => {
+    const freshLine = await tx.orderLine.findUnique({ where: { id: input.lineId } });
+    if (!freshLine) throw notFound('Order line not found.');
+    const freshPending = await tx.returnRequest.findMany({
+      where: { orderLineId: input.lineId, status: { notIn: ['rejected', 'withdrawn', 'closed'] } },
+      select: { requestedQty: true },
+    });
+    assertReturnableQty({
+      quantity: freshLine.quantity,
+      cancelledQty: freshLine.cancelledQty,
+      returnedQty: freshLine.returnedQty,
+      pendingQty: freshPending.reduce((s: number, r: { requestedQty: number }) => s + r.requestedQty, 0),
+      qty: input.qty,
+    });
 
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO return_requests
-       (id, reference, order_id, order_line_id, variant_id, requested_qty, reason, customer_note,
-        photos, status, shipping_method, refundable_amount, return_window_days, refund_account_id, requested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, NOW(3))`,
-    id, reference, input.orderId, input.lineId, line.variant_id,
-    input.qty, input.reason, input.note ?? null, photosJson,
-    input.shippingMethod ?? null, refundableAmount, windowDays, input.refundAccountId ?? null,
-  );
+    await tx.returnRequest.create({
+      data: {
+        id,
+        reference,
+        orderId: input.orderId,
+        orderLineId: input.lineId,
+        variantId: line.variantId,
+        requestedQty: input.qty,
+        reason: input.reason,
+        customerNote: input.note ?? null,
+        photos: photosJson,
+        status: 'requested',
+        shippingMethod: input.shippingMethod ?? null,
+        refundableAmount,
+        returnWindowDays: window.windowDays,
+        refundAccountId: input.refundAccountId ?? null,
+      },
+    });
 
-  // Reserve qty
-  await prisma.$executeRawUnsafe(
-    `UPDATE order_lines SET returned_qty = returned_qty + ? WHERE id = ?`,
-    input.qty, input.lineId,
-  );
+    // Reserve qty
+    await tx.orderLine.update({
+      where: { id: input.lineId },
+      data: { returnedQty: { increment: input.qty } },
+    });
 
-  // Log event
-  const evId = randomHexId(12);
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO return_events (id, return_id, type, actor, actor_id, message, created_at)
-       VALUES (?, ?, 'requested', 'customer', ?, ?, NOW(3))`,
-    evId, id, customerId, `Return requested: ${input.qty} unit(s). Reason: ${input.reason}`,
-  );
+    // Log event
+    await tx.returnEvent.create({
+      data: {
+        id: randomHexId(12),
+        returnId: id,
+        type: 'requested',
+        actor: 'customer',
+        actorId: customerId,
+        message: `Return requested: ${input.qty} unit(s). Reason: ${input.reason}`,
+      },
+    });
 
-  // Add order event
-  await prisma.orderEvent.create({
-    data: {
-      orderId: input.orderId,
-      type: 'return',
-      message: `Return request ${reference} submitted for ${input.qty} unit(s) of ${line.name_en}.`,
-      actor: 'customer',
-    },
+    // Add order event
+    await tx.orderEvent.create({
+      data: {
+        orderId: input.orderId,
+        type: 'return',
+        message: `Return request ${reference} submitted for ${input.qty} unit(s) of ${line.nameEn}.`,
+        actor: 'customer',
+      },
+    });
   });
 
   return fetchReturnWithDetails(id);
 }
 
 export async function listCustomerReturns(customerId: string) {
-  return prisma.$queryRawUnsafe<ReturnRequestRow[]>(
-    `SELECT rr.* FROM return_requests rr
-       JOIN orders o ON o.id = rr.order_id
-       WHERE o.customerId = ? AND o.customerKind = 'account'
-       ORDER BY rr.requested_at DESC`,
-    customerId,
-  );
+  const orders = await prisma.order.findMany({
+    where: { customerId, customerKind: 'account' },
+    select: { id: true },
+  });
+  if (orders.length === 0) return [];
+  const rows = await prisma.returnRequest.findMany({
+    where: { orderId: { in: orders.map((o: { id: string }) => o.id) } },
+    orderBy: { requestedAt: 'desc' },
+  });
+  return rows.map(toReturnRequestRow);
 }
 
 export async function getCustomerReturn(customerId: string, reference: string) {
@@ -186,22 +287,33 @@ export async function withdrawReturn(customerId: string, reference: string) {
     throw conflict('This return request can no longer be withdrawn — it has already been reviewed.');
   }
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'withdrawn', decided_at = NOW(3) WHERE id = ?`,
-    row.id,
-  );
-  // Release reserved quantity
-  await prisma.$executeRawUnsafe(
-    `UPDATE order_lines SET returned_qty = GREATEST(0, returned_qty - ?) WHERE id = ?`,
-    row.requested_qty, row.order_line_id,
-  );
-
-  const evId = randomHexId(12);
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO return_events (id, return_id, type, actor, actor_id, message, created_at)
-       VALUES (?, ?, 'withdrawn', 'customer', ?, 'Customer withdrew the return request.', NOW(3))`,
-    evId, row.id, customerId,
-  );
+  await prisma.$transaction(async (tx: any) => {
+    await tx.returnRequest.update({
+      where: { id: row.id },
+      data: { status: 'withdrawn', decidedAt: new Date() },
+    });
+    // Release reserved quantity (never below zero)
+    const line = await tx.orderLine.findUnique({
+      where: { id: row.order_line_id },
+      select: { returnedQty: true },
+    });
+    if (line) {
+      await tx.orderLine.update({
+        where: { id: row.order_line_id },
+        data: { returnedQty: Math.max(0, line.returnedQty - row.requested_qty) },
+      });
+    }
+    await tx.returnEvent.create({
+      data: {
+        id: randomHexId(12),
+        returnId: row.id,
+        type: 'withdrawn',
+        actor: 'customer',
+        actorId: customerId,
+        message: 'Customer withdrew the return request.',
+      },
+    });
+  });
 
   return row.reference;
 }

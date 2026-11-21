@@ -7,6 +7,9 @@ import type { CheckoutTotalsInput, ValidateCouponInput } from './checkout.schema
 import type { Buyer, ResolvedLine, StockIssue, WalletPreviewInfo } from './checkout.types.js';
 import { calculateTotals, getShippingQuote, getShippingQuotes, getTaxRate } from './pricing.service.js';
 import { getBalance } from '../wallet/wallet.service.js';
+import { availableAfterHolds, reservedQuantities } from './stock-hold.service.js';
+import { isRateStale } from '../settings/exchange-rate.service.js';
+import { logger } from '../../shared/observability/logger.js';
 
 // Server-calculated checkout: the client never computes a total that is trusted. Both /totals (a
 // preview, no side effects) and /orders (places a real order) run the exact same pricing pipeline in
@@ -15,14 +18,41 @@ import { getBalance } from '../wallet/wallet.service.js';
 export const customerKeyFor = (buyer: Buyer) => (buyer.customerId ? `acct:${buyer.customerId}` : `guest:${buyer.email.trim().toLowerCase()}`);
 
 async function loadPricingContext(currencyCode: string) {
-  const [allCurrencies, shipping, tax] = await Promise.all([
+  const [allCurrencies, shipping, tax, store, currencySettings] = await Promise.all([
     prisma.currencyConfig.findMany({ where: { settingsId: 'singleton' } }),
     prisma.shippingSettings.findUniqueOrThrow({ where: { id: 'singleton' }, include: { zones: true } }),
     prisma.taxSettings.findUniqueOrThrow({ where: { id: 'singleton' }, include: { rules: true } }),
+    prisma.storeSettings.findUnique({ where: { id: 'singleton' }, select: { maxQtyPerLine: true, handlingMinDays: true, handlingMaxDays: true } }),
+    prisma.currencySettings.findUnique({ where: { id: 'singleton' }, select: { ratesUpdatedAt: true } }),
   ]);
   const currency = allCurrencies.find((c) => c.code === currencyCode && c.enabled);
   if (!currency) throw badRequest('That currency is not available.', [{ path: 'currency', message: 'Not available.' }]);
-  return { currency, allCurrencies, zones: shipping.zones, taxRules: tax.rules, defaultTaxRate: tax.defaultRate, pricesIncludeTax: tax.pricesIncludeTax };
+  // M-S3: never price with a missing/zero rate — a stale or broken rate config must
+  // fail the checkout loudly instead of charging NaN or 0.
+  if (!Number.isFinite(currency.rate) || currency.rate <= 0) {
+    throw badRequest('That currency is not available right now.', [{ path: 'currency', message: 'Exchange rate unavailable.' }]);
+  }
+  // M12: stale-rate guard — a converted (non-USD) checkout must not price off rates
+  // older than 24h (MAX_RATE_AGE_MS). USD is the base currency (rate is 1 by
+  // definition) so it is never blocked. When rates were never synced at all
+  // (ratesUpdatedAt null — e.g. a fresh seed), checkout still proceeds on the seeded
+  // rates but logs loudly so the owner notices; refusing outright would brick every
+  // non-USD checkout until the first sync runs.
+  if (currencyCode !== 'USD') {
+    if (!currencySettings?.ratesUpdatedAt) {
+      logger.warn('exchange rates never synced, pricing checkout off seeded rates', { currency: currencyCode });
+    } else if (isRateStale(currencySettings.ratesUpdatedAt)) {
+      throw badRequest('Exchange rates are stale (last sync over 24 hours ago). Please try again later.', [{ path: 'currency', message: 'Exchange rates are stale.' }]);
+    }
+  }
+  return {
+    currency, allCurrencies, zones: shipping.zones, taxRules: tax.rules, defaultTaxRate: tax.defaultRate, pricesIncludeTax: tax.pricesIncludeTax,
+    // M-S2: free-shipping threshold in USD minor units (null = no threshold).
+    freeShippingThreshold: shipping.freeShippingThreshold ?? null,
+    // M-S1: the live per-line quantity cap the owner set in Store settings (default 10).
+    maxQtyPerLine: store?.maxQtyPerLine ?? 10,
+    handlingDays: { min: store?.handlingMinDays ?? 1, max: store?.handlingMaxDays ?? 2 },
+  };
 }
 
 async function resolveLines(
@@ -47,13 +77,18 @@ async function resolveLines(
   const resolved: ResolvedLine[] = [];
   const stockIssues: StockIssue[] = [];
 
+  // H5: availability subtracts unexpired stock holds (other shoppers mid-checkout),
+  // in one indexed query — the variant's raw stock alone would oversell the last unit.
+  const reserved = await reservedQuantities(variantIds);
+
   for (const line of lines) {
     const variant = variants.find((v) => v.id === line.variantId && v.productId === line.productId);
     if (!variant || variant.product.status !== 'active' || !variant.product.category.isActive) {
       throw badRequest('One of the items in your cart is no longer available.', [{ path: 'lines', message: 'Unavailable.' }]);
     }
-    if (variant.stock < line.quantity) {
-      stockIssues.push({ productId: line.productId, variantId: line.variantId, requested: line.quantity, available: variant.stock });
+    const available = availableAfterHolds(variant.stock, reserved.get(line.variantId) ?? 0);
+    if (available < line.quantity) {
+      stockIssues.push({ productId: line.productId, variantId: line.variantId, requested: line.quantity, available });
     }
     const chosen = JSON.parse(variant.options || '{}') as Record<string, string>;
     const variantLabelEn = variant.product.options
@@ -79,7 +114,7 @@ async function resolveLines(
       variantLabelEn,
       variantLabelHi,
       imageUrl: variant.product.images[0] ? mediaUrl(variant.product.images[0].mediaId) : '',
-      availableStock: variant.stock,
+      availableStock: available,
     });
   }
   return { resolved, stockIssues };
@@ -88,10 +123,13 @@ async function resolveLines(
 /** The single pricing pipeline behind both the totals preview and order placement. */
 export async function computePreview(input: CheckoutTotalsInput, customerKey: string) {
   const context = await loadPricingContext(input.currency);
+  // M-S1: the owner's per-line cap is enforced here, not just in the storefront UI —
+  // a tampered client cannot order more than maxQtyPerLine of one variant.
+  const overLimit = input.lines.find((l) => l.quantity > context.maxQtyPerLine);
+  if (overLimit) {
+    throw badRequest(`You can order at most ${context.maxQtyPerLine} of one item per line.`, [{ path: 'lines', message: `Maximum ${context.maxQtyPerLine} per line.` }]);
+  }
   const { resolved, stockIssues } = await resolveLines(input.lines, context.currency);
-
-  const quote = getShippingQuote(context.zones, input.country, input.shippingMethodId, context.currency);
-  const quotes = getShippingQuotes(context.zones, input.country, context.currency);
 
   let discount = 0;
   let couponError: string | null = null;
@@ -107,6 +145,16 @@ export async function computePreview(input: CheckoutTotalsInput, customerKey: st
       else discount = evaluation.discount;
     }
   }
+
+  // M-S2: free shipping applies on the goods subtotal after discounts, before
+  // shipping/tax — the same value the shopper sees as the order subtotal.
+  const goodsSubtotal = resolved.reduce((sum, l) => sum + l.lineTotalConverted, 0) - discount;
+  const freeShipping =
+    context.freeShippingThreshold !== null
+      ? { thresholdMinor: convertFromBase(context.freeShippingThreshold, context.currency), subtotalMinor: goodsSubtotal }
+      : undefined;
+  const quote = getShippingQuote(context.zones, input.country, input.shippingMethodId, context.currency, freeShipping);
+  const quotes = getShippingQuotes(context.zones, input.country, context.currency, freeShipping);
 
   const taxRate = getTaxRate(context.taxRules, context.defaultTaxRate, input.country, input.region ?? null);
   const totals = calculateTotals({

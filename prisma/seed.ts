@@ -430,15 +430,22 @@ async function seedSettings() {
     });
   }
 
-  // Currencies: the four the apps already ship, same illustrative rates as frontend/src/data/currencies.ts.
+  // Currencies: the four the apps already ship. L-S6: seed rates are current values,
+  // not the illustrative 2026-10-01 ones (INR 84 / EUR 0.92 / GBP 0.78). Rates as of
+  // 2026-11-20 (RBI reference rates: INR 92.97 per USD, INR 102.15 per EUR,
+  // INR 121.93 per GBP → 1 USD = EUR 0.91, GBP 0.76). They are still only a starting
+  // point — the owner should switch currencies to Live (see CurrencySettingsPage).
   await prisma.currencySettings.upsert({ where: { id: 'singleton' }, create: { id: 'singleton', base: 'USD' }, update: {} });
   if ((await prisma.currencyConfig.count({ where: { settingsId: 'singleton' } })) === 0) {
     await prisma.currencyConfig.createMany({
       data: [
         { settingsId: 'singleton', code: 'USD', name: 'US Dollar', enabled: true, rate: 1, fractionDigits: 2, roundingIncrement: 1 },
-        { settingsId: 'singleton', code: 'INR', name: 'Indian Rupee', enabled: true, rate: 84, fractionDigits: 0, roundingIncrement: 100 },
-        { settingsId: 'singleton', code: 'EUR', name: 'Euro', enabled: true, rate: 0.92, fractionDigits: 2, roundingIncrement: 1 },
-        { settingsId: 'singleton', code: 'GBP', name: 'British Pound', enabled: true, rate: 0.78, fractionDigits: 2, roundingIncrement: 1 },
+        // M11: the main currencies seed with live sync ON, so syncLiveRates actually
+        // has something to sync out of the box (before this, every currency seeded
+        // with autoRate false and live sync early-returned with zero configs).
+        { settingsId: 'singleton', code: 'INR', name: 'Indian Rupee', enabled: true, rate: 93, fractionDigits: 0, roundingIncrement: 100, autoRate: true },
+        { settingsId: 'singleton', code: 'EUR', name: 'Euro', enabled: true, rate: 0.91, fractionDigits: 2, roundingIncrement: 1, autoRate: true },
+        { settingsId: 'singleton', code: 'GBP', name: 'British Pound', enabled: true, rate: 0.76, fractionDigits: 2, roundingIncrement: 1, autoRate: true },
       ],
     });
   }
@@ -517,7 +524,7 @@ async function seedContent() {
       ),
       imageId: heroImageId,
       ctaLabel: L('Shop collection', ''),
-      ctaHref: '/shop',
+      ctaHref: '/product/everyday-speckled-mug',
     },
     featuredCategoryIds: CATEGORY_SOURCES.map((c) => c.id),
     featuredProductIds: HOMEPAGE_FEATURED,
@@ -689,7 +696,8 @@ async function main() {
   let created = 0;
   let skipped = 0;
   for (const src of PRODUCT_SOURCES) {
-    (await seedProduct(src)) ? created++ : skipped++;
+    if (await seedProduct(src)) created++;
+    else skipped++;
   }
   console.log(`  products   ${created} written, ${skipped} already present${FORCE ? '' : ' (set SEED_FORCE=1 to overwrite)'}`);
 

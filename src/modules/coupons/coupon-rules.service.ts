@@ -1,4 +1,4 @@
-import { convertFromBase, type CurrencyConfigLike } from '../../shared/utils/currency.js';
+import { convertFromBase, roundMinor, type CurrencyConfigLike } from '../../shared/utils/currency.js';
 import { parseStringArray } from '../../shared/utils/json.js';
 
 export interface CouponLike {
@@ -76,7 +76,10 @@ export function evaluateCoupon(
   const maxDiscount = coupon.maxDiscount != null ? convertFromBase(coupon.maxDiscount, currency) : null;
   let discount: number;
   if (coupon.type === 'percentage') {
-    discount = Math.round(eligibleSubtotal * (coupon.value / 100));
+    // L3: percentage discounts round through the currency's rounding increment,
+    // like every other converted amount — a bare Math.round here rounded INR
+    // discounts to the paise while convertFromBase rounds them to the rupee.
+    discount = roundMinor(eligibleSubtotal * (coupon.value / 100), currency);
     if (maxDiscount != null) discount = Math.min(discount, maxDiscount);
   } else {
     discount = convertFromBase(coupon.value, currency);

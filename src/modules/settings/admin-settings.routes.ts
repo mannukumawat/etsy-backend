@@ -14,7 +14,7 @@ settingsRouter.put(
   '/store',
   route(async (req, res) => {
     const input = storeSettingsSchema.parse(req.body);
-    res.json(await saveStoreSettings(input));
+    res.json(await saveStoreSettings(input, req.owner!.email));
   }),
 );
 
@@ -22,7 +22,7 @@ settingsRouter.put(
   '/shipping',
   route(async (req, res) => {
     const input = shippingSettingsSchema.parse(req.body);
-    res.json(await saveShippingSettings(input));
+    res.json(await saveShippingSettings(input, req.owner!.email));
   }),
 );
 
@@ -30,7 +30,7 @@ settingsRouter.put(
   '/tax',
   route(async (req, res) => {
     const input = taxSettingsSchema.parse(req.body);
-    res.json(await saveTaxSettings(input));
+    res.json(await saveTaxSettings(input, req.owner!.email));
   }),
 );
 
@@ -38,7 +38,7 @@ settingsRouter.put(
   '/currencies',
   route(async (req, res) => {
     const input = currencySettingsSchema.parse(req.body);
-    res.json(await saveCurrencySettings(input));
+    res.json(await saveCurrencySettings(input, req.owner!.email));
   }),
 );
 

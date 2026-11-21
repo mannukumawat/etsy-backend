@@ -17,3 +17,14 @@ export const walletTxListSchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 export type WalletTxListInput = z.infer<typeof walletTxListSchema>;
+
+/** M-O7: owner wallet adjustment (credit/debit with a reason). This is an admin ledger
+ *  action, NOT a Razorpay top-up: no money moves through a gateway, the balance is
+ *  adjusted directly and the row is recorded with an `admin-adjust:` reference + note
+ *  so it is auditable in the transaction history. */
+export const adminWalletAdjustSchema = z.object({
+  direction: z.enum(['credit', 'debit']),
+  amountPaise: z.number().int('Must be an integer.').positive('Amount must be positive.').max(100_000_000),
+  note: z.string().trim().min(3, 'Add a short reason (at least 3 characters).').max(300),
+});
+export type AdminWalletAdjustInput = z.infer<typeof adminWalletAdjustSchema>;

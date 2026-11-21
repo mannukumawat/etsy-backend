@@ -26,3 +26,9 @@ export const shipExchangeSchema = z.object({
   tracking: z.string().min(1),
 });
 export type ShipExchangeInput = z.infer<typeof shipExchangeSchema>;
+
+export const recordPaymentSchema = z.object({
+  reference: z.string().min(1).max(200),
+  note: z.string().max(500).optional(),
+});
+export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;

@@ -32,6 +32,16 @@ export function roundMinor(amount: number, currency: Pick<CurrencyConfigLike, 'r
   return sign * Math.round(Math.abs(amount) / inc) * inc;
 }
 
+/**
+ * M-S3 guard: a missing, zero, negative or non-finite rate must never silently
+ * convert prices to NaN or 0 (the storefront's convertFromBase has no such guard,
+ * so the backend — the only layer that can refuse — throws instead of charging
+ * a wrong total). Callers that serve a currency must validate its rate first
+ * (loadPricingContext does); this is the last line of defence.
+ */
 export function convertFromBase(baseMinor: number, currency: CurrencyConfigLike): number {
+  if (!Number.isFinite(currency.rate) || currency.rate <= 0) {
+    throw new Error(`Invalid exchange rate for ${currency.code}: ${String(currency.rate)}. Refusing to convert prices.`);
+  }
   return roundMinor(baseMinor * currency.rate, currency);
 }

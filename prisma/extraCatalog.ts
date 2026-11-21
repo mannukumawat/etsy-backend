@@ -1,5 +1,6 @@
 import type { ArtKind, ArtSpec, CompositeItem } from './art.js';
 import type { ProductSource, SourceOption } from './catalogSource.js';
+import { slugify } from '../src/shared/utils/slugify.js';
 
 // Extended sample catalogue: 15 more categories with 12 products each (180), generated
 // deterministically so re-running the seed produces exactly the same ids, names and prices.
@@ -59,7 +60,10 @@ const ADJECTIVES = ['Speckled', 'Hand-thrown', 'Rustic', 'Coastal', 'Heirloom', 
 
 function rng(seed: string) {
   let h = 1779033703 ^ seed.length;
-  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 3432918353), (h = (h << 13) | (h >>> 19));
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
   return () => {
     h = Math.imul(h ^ (h >>> 16), 2246822507);
     h = Math.imul(h ^ (h >>> 13), 3266489909);
@@ -67,7 +71,6 @@ function rng(seed: string) {
   };
 }
 
-const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const PER_CATEGORY = 12;
 
 export const EXTRA_CATEGORY_SOURCES = CATEGORIES.map((c) => {

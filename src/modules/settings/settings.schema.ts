@@ -4,18 +4,27 @@ import { localized } from '../../shared/validation/common.schema.js';
 const urlOrEmpty = z
   .string()
   .trim()
-  .refine((v) => v === '' || /^https?:\/\//i.test(v), 'Use a full https:// URL, or leave it blank.')
+  // L-S2: social links must be https on both sides (the admin form already
+  // requires https); plain http is rejected so a saved link can never be
+  // downgraded by one side accepting what the other refuses.
+  .refine((v) => v === '' || /^https:\/\//i.test(v), 'Use a full https:// URL, or leave it blank.')
   .default('');
 
 export const storeSettingsSchema = z.object({
   name: z.string().trim().min(1, 'Store name is required.').max(60),
-  tagline: localized(160),
+  // L-S2: tagline/hours caps match the admin form (120), not a looser backend guess.
+  tagline: localized(120),
   logoId: z.string().nullable().default(null),
   contact: z.object({
-    email: z.string().trim().email('Enter a valid email address.').or(z.literal('')).default(''),
+    // L-S2: email is required on both sides — the admin form already requires it,
+    // and the storefront shows it to customers who want to contact the store.
+    email: z.string().trim().email('Enter a valid email address.'),
+    // L-S2: phone max 30 (admin form) — the backend's 40 let a 31–40 char phone
+    // pass the API and then fail the admin's own form on the next edit.
     phone: z.string().trim().max(30).default(''),
-    address: z.string().trim().max(300).default(''),
-    hours: localized(200),
+    // L-S2: address max 240 (admin form) — the backend's 300 had the same trap.
+    address: z.string().trim().max(240).default(''),
+    hours: localized(120),
   }),
   social: z.object({
     instagram: urlOrEmpty,
@@ -57,8 +66,13 @@ const shippingZoneSchema = z
 
 export const shippingSettingsSchema = z
   .object({
-    zones: z.array(shippingZoneSchema).max(20),
+    // L-S3: at least one zone (checkout has nowhere to ship to with zero zones)
+    // and at most 20 — the admin form enforces the same bounds, so a 21st zone
+    // can no longer fail server-side with a `zones` error the form cannot show.
+    zones: z.array(shippingZoneSchema).min(1, 'Add at least one shipping zone.').max(20, 'At most 20 shipping zones.'),
     unsupportedMessage: localized(300),
+    /** Free-shipping threshold in USD minor units (M-S2). Null = no threshold. */
+    freeShippingThreshold: z.number().int().min(0).max(100_000_000).nullable().default(null),
   })
   .superRefine((input, ctx) => {
     const names = new Set<string>();

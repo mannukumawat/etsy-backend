@@ -7,13 +7,14 @@ import { deleteContactMessage, findContactMessageOrThrow, listContactMessages, o
 export const adminContactsRouter = Router();
 adminContactsRouter.use(requireOwner);
 
-// GET /api/admin/contacts?status=unread&page=1
+// GET /api/admin/contacts?status=unread&q=mug&page=1
 adminContactsRouter.get(
   '/',
   route(async (req, res) => {
     const status = typeof req.query.status === 'string' && (CONTACT_STATUSES as readonly string[]).includes(req.query.status) ? req.query.status : null;
     const page = Math.max(1, Number(req.query.page) || 1);
-    res.json(await listContactMessages({ status, page }));
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    res.json(await listContactMessages({ status, page, q }));
   }),
 );
 

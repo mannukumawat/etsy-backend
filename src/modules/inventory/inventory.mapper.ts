@@ -1,18 +1,23 @@
 import { mediaUrl } from '../../shared/config/env.js';
+import { parseStringArray } from '../../shared/utils/json.js';
 import { L } from '../../shared/utils/localized.js';
 
 export function toInventoryRow(v: {
   id: string; sku: string; stock: number;
+  imageIds: string;
   product: { id: string; nameEn: string; nameHi: string; categoryId: string; status: string; images: Array<{ mediaId: string }> };
   options: string;
 }, optionLabel: string | null, lastAdjustedAt: Date | null) {
+  // L-I7: prefer the variant's own image, falling back to the product's first
+  // image — the same order the mock/admin catalogue path already uses.
+  const variantImageId = parseStringArray(v.imageIds)[0];
   return {
     productId: v.product.id,
     variantId: v.id,
     sku: v.sku,
     productName: L(v.product.nameEn, v.product.nameHi),
     variantLabel: optionLabel,
-    imageUrl: v.product.images[0] ? mediaUrl(v.product.images[0].mediaId) : null,
+    imageUrl: variantImageId ? mediaUrl(variantImageId) : v.product.images[0] ? mediaUrl(v.product.images[0].mediaId) : null,
     categoryId: v.product.categoryId,
     productStatus: v.product.status as 'draft' | 'active' | 'archived',
     stock: v.stock,
@@ -36,7 +41,7 @@ export function toStockAdjustment(a: {
     before: a.before,
     after: a.after,
     delta: a.delta,
-    reason: a.reason as 'restock' | 'correction' | 'damaged' | 'returned' | 'order_cancelled' | 'other',
+    reason: a.reason as 'restock' | 'correction' | 'damaged' | 'returned' | 'order_cancelled' | 'other' | 'sale' | 'return_received' | 'exchange_shipped',
     note: a.note,
     createdAt: a.createdAt.toISOString(),
     actor: a.actor,

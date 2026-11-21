@@ -1,4 +1,6 @@
-// Raw-SQL row shapes: the return/refund tables live outside the Prisma model (created by migrate-returns.ts).
+// Row shapes for the return/refund tables, which are real Prisma models
+// (ReturnRequest / ReturnEvent / Refund) since migration 20261121010000.
+// The repository maps Prisma models to these snake_case row shapes.
 
 export interface ReturnRequestRow {
   id: string; reference: string; order_id: string; order_line_id: string; variant_id: string;
@@ -10,6 +12,7 @@ export interface ReturnRequestRow {
   pickup_address: string | null; return_carrier: string | null; return_tracking: string | null;
   refundable_amount: number; shipping_fee: number; refund_amount: number | null;
   return_window_days: number;
+  refund_account_id: string | null; refund_method_override: string | null;
   requested_at: Date; decided_at: Date | null; received_at: Date | null;
   inspected_at: Date | null; refunded_at: Date | null;
 }

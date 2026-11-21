@@ -12,6 +12,22 @@ export async function assertProductReferencesExist(input: ProductInput) {
     ]);
   }
   await assertMediaExists(input.images.map((i) => i.mediaId));
+  if (input.collectionId) {
+    const collection = await prisma.collection.findUnique({ where: { id: input.collectionId }, select: { id: true } });
+    if (!collection) throw badRequest('Choose an existing collection.', [{ path: 'collectionId', message: 'Collection not found.' }]);
+  }
+}
+
+/** Slugs are unique catalogue-wide; the editor's client-side check only ever saw a
+ *  capped page, so the server is the authority (H16) — same friendly conflict shape
+ *  as the SKU check, with the field path so the editor can highlight the slug field. */
+export async function assertProductSlugAvailable(slug: string, selfId: string | null) {
+  const clash = await prisma.product.findUnique({ where: { slug }, select: { id: true, nameEn: true } });
+  if (clash && clash.id !== selfId) {
+    throw conflict(`Another product already uses the URL “/${slug}”.`, [
+      { path: 'slug', message: `“${clash.nameEn}” already uses this URL.` },
+    ]);
+  }
 }
 
 /** SKUs are unique across the whole catalog, not just within a product. */

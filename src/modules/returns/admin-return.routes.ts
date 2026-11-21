@@ -3,7 +3,7 @@ import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
 import {
   addReturnNote, approveReturn, arrangeReturnPickup, getReturnDetail, inspectReturn, listReturns, processReturnRefund,
-  receiveReturn, recordReturnShipping, rejectReturn,
+  receiveReturn, recordReturnShipping, rejectReturn, verifyReturnRefund,
 } from './admin-return.service.js';
 import { toAdminReturn, toAdminReturnDetail, toAdminReturnListItem } from './return.mapper.js';
 import {
@@ -111,6 +111,16 @@ adminReturnsRouter.post(
   route(async (req, res) => {
     const input = processReturnRefundSchema.parse(req.body);
     const { row, events, refund } = await processReturnRefund(req.params.id, input, ownerActor(req));
+    res.json(toAdminReturn(row!, events, refund));
+  }),
+);
+
+// POST /:id/refund/verify — verify a pending manual (bank/UPI) refund: only now do the
+// order totals move and the return become 'refunded'.
+adminReturnsRouter.post(
+  '/:id/refund/verify',
+  route(async (req, res) => {
+    const { row, events, refund } = await verifyReturnRefund(req.params.id, ownerActor(req));
     res.json(toAdminReturn(row!, events, refund));
   }),
 );

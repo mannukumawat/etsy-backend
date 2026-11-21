@@ -11,8 +11,9 @@ const mocks = vi.hoisted(() => {
     productImage: { deleteMany: vi.fn(), createMany: vi.fn() },
     productOption: { deleteMany: vi.fn(), create: vi.fn() },
     productOptionValue: { deleteMany: vi.fn() },
-    productVariant: { deleteMany: vi.fn(), createMany: vi.fn() },
+    productVariant: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
     productSpec: { deleteMany: vi.fn(), createMany: vi.fn() },
+    inventoryAdjustment: { createMany: vi.fn() },
   };
   return {
     tx,
@@ -49,6 +50,8 @@ describe('product write path: id remapping', () => {
     mocks.prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(mocks.tx));
     mocks.prisma.category.findUnique.mockResolvedValue({ id: 'ceramics', isActive: true });
     mocks.prisma.productVariant.findMany.mockResolvedValue([]);
+    mocks.prisma.product.findUnique.mockResolvedValue(undefined);
+    mocks.tx.productVariant.findMany.mockResolvedValue([]);
     mocks.prisma.product.findUniqueOrThrow.mockResolvedValue(productRow());
   });
 
@@ -186,6 +189,64 @@ describe('product write path: id remapping', () => {
 
     expect(mocks.tx.productOption.create.mock.calls.map((c) => c[0].data.id)).toEqual(['p-mug__color', 'p-bowl__color']);
   });
+  it('update: preserves CURRENT stock for existing variants and logs initial stock for new ones (H2/H3)', async () => {
+    mocks.prisma.product.findUnique.mockResolvedValue({ id: 'p-mug' });
+    // The variant was loaded with stock 1, then a sale dropped it to 0 before the save.
+    mocks.tx.productVariant.findMany.mockResolvedValue([{ id: 'p-mug--v-red', stock: 0 }]);
+
+    await updateProduct(
+      'p-mug',
+      parse({
+        slug: 'mug',
+        name: { en: 'Mug' },
+        shortDescription: { en: '' },
+        description: { en: '' },
+        materials: { en: '' },
+        care: { en: '' },
+        categoryId: 'ceramics',
+        basePrice: 1500,
+        options: [colorOption('color', 'red', 'blue')],
+        variants: [
+          { id: 'p-mug--v-red', sku: 'MUG-RED', options: { color: 'red' }, price: 1500, stock: 1 },
+          { id: 'v-blue', sku: 'MUG-BLUE', options: { color: 'blue' }, price: 1500, stock: 4 },
+        ],
+      }),
+    );
+
+    const variants = mocks.tx.productVariant.createMany.mock.calls[0][0].data as Array<{ id: string; stock: number }>;
+    // Stale form stock (1) must NOT resurrect the sold unit.
+    expect(variants.find((v) => v.id === 'p-mug--v-red')?.stock).toBe(0);
+    // The new variant takes the form's initial stock…
+    expect(variants.find((v) => v.id === 'p-mug--v-blue')?.stock).toBe(4);
+    // …and that initial stock gets a history row (before 0 → 4).
+    const adjustments = mocks.tx.inventoryAdjustment.createMany.mock.calls[0][0].data as Array<Record<string, unknown>>;
+    expect(adjustments).toHaveLength(1);
+    expect(adjustments[0]).toMatchObject({ variantId: 'p-mug--v-blue', before: 0, after: 4, delta: 4, reason: 'restock' });
+  });
+
+  it('create: logs initial stock for new variants (H2)', async () => {
+    await createProduct(
+      parse({
+        slug: 'mug',
+        name: { en: 'Mug' },
+        shortDescription: { en: '' },
+        description: { en: '' },
+        materials: { en: '' },
+        care: { en: '' },
+        categoryId: 'ceramics',
+        basePrice: 1500,
+        options: [colorOption('color', 'red', 'blue')],
+        variants: [
+          { id: 'v-red', sku: 'MUG-RED', options: { color: 'red' }, price: 1500, stock: 3 },
+          { id: 'v-blue', sku: 'MUG-BLUE', options: { color: 'blue' }, price: 1500, stock: 0 },
+        ],
+      }),
+    );
+
+    const adjustments = mocks.tx.inventoryAdjustment.createMany.mock.calls[0][0].data as Array<Record<string, unknown>>;
+    expect(adjustments).toHaveLength(1);
+    expect(adjustments[0]).toMatchObject({ variantId: 'p-mug--v-red', before: 0, after: 3, delta: 3, reason: 'restock' });
+  });
 });
 
 describe('product write path: transaction shape', () => {
@@ -194,6 +255,8 @@ describe('product write path: transaction shape', () => {
     mocks.prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(mocks.tx));
     mocks.prisma.category.findUnique.mockResolvedValue({ id: 'ceramics', isActive: true });
     mocks.prisma.productVariant.findMany.mockResolvedValue([]);
+    mocks.prisma.product.findUnique.mockResolvedValue(undefined);
+    mocks.tx.productVariant.findMany.mockResolvedValue([]);
     mocks.prisma.product.findUniqueOrThrow.mockResolvedValue(productRow());
   });
 

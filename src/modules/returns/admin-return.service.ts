@@ -1,8 +1,9 @@
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, notFound } from '../../shared/errors/http-error.js';
 import { randomHexId } from '../../shared/utils/ids.js';
-import { fetchReturnWithDetails } from './return.repository.js';
-import { creditWallet } from '../wallet/wallet.service.js';
+import { adjustmentData } from '../../shared/utils/inventory-adjustments.js';
+import { fetchReturnWithDetails, toReturnRequestRow, type ReturnRequestModel } from './return.repository.js';
+import { applyOrderRefundTotals, issueOrderRefund, type OrderLike } from '../orders/refund.service.js';
 import { emitNotificationEvent } from '../../shared/events/notification-events.js';
 import type {
   AddReturnNoteInput, ApproveReturnInput, ArrangePickupInput, InspectReturnInput, ProcessReturnRefundInput,
@@ -12,13 +13,14 @@ import type { OwnerActor, ReturnLineSummary, ReturnListRow, ReturnRequestRow } f
 
 // Owner-side return workflow:
 //   requested -> approved -> (shipping_arranged | in_transit) -> received -> inspected -> refunded
-// (or rejected / withdrawn). Raw SQL throughout: the return tables live outside the Prisma model
-// (created by migrate-returns.ts).
+// (or rejected / withdrawn). Backed by the Prisma ReturnRequest / ReturnEvent /
+// Refund models. All money movement goes through refund.service's issueOrderRefund —
+// this file writes no refund rows itself.
 
 async function loadReturnOr404(id: string) {
-  const rows = await prisma.$queryRawUnsafe<ReturnRequestRow[]>(`SELECT * FROM return_requests WHERE id = ?`, id);
-  if (!rows[0]) throw notFound('Return request not found.');
-  return rows[0];
+  const row = await prisma.returnRequest.findUnique({ where: { id } });
+  if (!row) throw notFound('Return request not found.');
+  return toReturnRequestRow(row);
 }
 
 function assertStatus(row: ReturnRequestRow, ...allowed: string[]) {
@@ -28,12 +30,22 @@ function assertStatus(row: ReturnRequestRow, ...allowed: string[]) {
 }
 
 async function addEvent(returnId: string, type: string, actor: 'admin' | 'system', message: string, actorId?: string) {
-  const id = randomHexId(12);
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO return_events (id, return_id, type, actor, actor_id, message, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW(3))`,
-    id, returnId, type, actor, actorId ?? null, message,
-  );
+  await prisma.returnEvent.create({
+    data: {
+      id: randomHexId(12),
+      returnId,
+      type,
+      actor,
+      actorId: actorId ?? null,
+      message,
+    },
+  });
+}
+
+/** Appends a note to the admin_note column the way CONCAT_WS did (skips empty parts). */
+function appendAdminNote(existing: string | null, note: string | null | undefined): string | null {
+  const parts = [existing, note].filter((p): p is string => !!p);
+  return parts.length ? parts.join(' | ') : existing;
 }
 
 export interface ReturnListQuery {
@@ -48,41 +60,84 @@ export async function listReturns({ status, orderId, q, page }: ReturnListQuery)
   const pageSize = 20;
   const offset = (page - 1) * pageSize;
 
-  let where = '1=1';
-  const params: unknown[] = [];
-  if (status) { where += ' AND rr.status = ?'; params.push(status); }
-  if (orderId) { where += ' AND rr.order_id = ?'; params.push(orderId); }
+  // The search text matches order number / customer email / customer name, so the
+  // matching order ids are resolved first (one query), then the returns are
+  // filtered by them — no N+1, and no loading all returns to filter in JS.
+  // An orderId filter and a search term combine (AND), exactly as before.
+  let orderIds: string[] | undefined;
   if (q) {
-    where += ' AND (rr.reference LIKE ? OR o.customerEmail LIKE ? OR o.customerName LIKE ? OR o.number LIKE ?)';
-    const like = `%${q}%`;
-    params.push(like, like, like, like);
+    const matching = await prisma.order.findMany({
+      where: {
+        OR: [
+          { number: { contains: q } },
+          { customerEmail: { contains: q } },
+          { customerName: { contains: q } },
+        ],
+      },
+      select: { id: true },
+    });
+    orderIds = matching.map((o: { id: string }) => o.id);
+    if (orderId && orderIds) orderIds = orderIds.filter((id) => id === orderId);
+  } else if (orderId) {
+    orderIds = [orderId];
   }
 
-  const countRows = await prisma.$queryRawUnsafe<Array<{ total: number }>>(
-    `SELECT COUNT(*) as total FROM return_requests rr JOIN orders o ON o.id = rr.order_id WHERE ${where}`,
-    ...params,
-  );
-  const total = Number(countRows[0]?.total ?? 0);
+  const where: { status?: string; orderId?: { in: string[] } } = {};
+  if (status) where.status = status;
+  if (orderIds) where.orderId = { in: orderIds };
 
-  const rows = await prisma.$queryRawUnsafe<ReturnListRow[]>(
-    `SELECT rr.*, o.number as order_number, o.customerEmail AS customer_email, o.customerName AS customer_name,
-              ol.nameEn AS name_en, ol.variantLabelEn AS variant_label_en, ol.unitPrice AS unit_price
-       FROM return_requests rr
-       JOIN orders o ON o.id = rr.order_id
-       LEFT JOIN order_lines ol ON ol.id = rr.order_line_id
-       WHERE ${where}
-       ORDER BY rr.requested_at DESC
-       LIMIT ? OFFSET ?`,
-    ...params, pageSize, offset,
-  );
+  const [total, rows, counts] = await Promise.all([
+    prisma.returnRequest.count({ where }),
+    orderIds && orderIds.length === 0
+      ? Promise.resolve([])
+      : prisma.returnRequest.findMany({
+          where,
+          orderBy: { requestedAt: 'desc' },
+          take: pageSize,
+          skip: offset,
+        }),
+    prisma.returnRequest.groupBy({ by: ['status'], _count: { _all: true } }),
+  ]);
+  const statusCounts = Object.fromEntries(counts.map((c: { status: string; _count: { _all: number } }) => [c.status, c._count._all]));
 
-  // Status counts
-  const counts = await prisma.$queryRawUnsafe<Array<{ status: string; cnt: number }>>(
-    `SELECT status, COUNT(*) as cnt FROM return_requests GROUP BY status`,
-  );
-  const statusCounts = Object.fromEntries(counts.map(c => [c.status, Number(c.cnt)]));
+  // Enrich the page with the order / line columns the admin table shows, in two
+  // batched queries (no N+1).
+  type ListOrder = { id: string; number: string; customerEmail: string; customerName: string };
+  type ListLine = { id: string; nameEn: string; variantLabelEn: string; unitPrice: number };
+  const orderIdList = [...new Set(rows.map((r: ReturnRequestModel) => r.orderId))];
+  const lineIdList = [...new Set(rows.map((r: ReturnRequestModel) => r.orderLineId))];
+  const [orders, lines]: [ListOrder[], ListLine[]] = await Promise.all([
+    orderIdList.length
+      ? prisma.order.findMany({
+          where: { id: { in: orderIdList } },
+          select: { id: true, number: true, customerEmail: true, customerName: true },
+        })
+      : Promise.resolve([] as ListOrder[]),
+    lineIdList.length
+      ? prisma.orderLine.findMany({
+          where: { id: { in: lineIdList } },
+          select: { id: true, nameEn: true, variantLabelEn: true, unitPrice: true },
+        })
+      : Promise.resolve([] as ListLine[]),
+  ]);
+  const orderById = new Map(orders.map((o: ListOrder) => [o.id, o] as const));
+  const lineById = new Map(lines.map((l: ListLine) => [l.id, l] as const));
+  const enriched: ReturnListRow[] = rows.map((r: ReturnRequestModel) => {
+    const row = toReturnRequestRow(r);
+    const o = orderById.get(r.orderId);
+    const l = lineById.get(r.orderLineId);
+    return {
+      ...row,
+      order_number: o?.number ?? '',
+      customer_email: o?.customerEmail ?? '',
+      customer_name: o?.customerName ?? '',
+      name_en: l?.nameEn ?? '',
+      variant_label_en: l?.variantLabelEn ?? '',
+      unit_price: l?.unitPrice ?? 0,
+    };
+  });
 
-  return { rows, total, pageCount: Math.max(1, Math.ceil(total / pageSize)), statusCounts };
+  return { rows: enriched, total, pageCount: Math.max(1, Math.ceil(total / pageSize)), statusCounts };
 }
 
 export async function getReturnDetail(id: string) {
@@ -91,11 +146,15 @@ export async function getReturnDetail(id: string) {
 
   // Enrich with order + line info
   const order = await prisma.order.findUnique({ where: { id: row.order_id } });
-  const lines = await prisma.$queryRawUnsafe<ReturnLineSummary[]>(
-    `SELECT nameEn AS name_en, variantLabelEn AS variant_label_en, unitPrice AS unit_price FROM order_lines WHERE id = ?`, row.order_line_id,
-  );
+  const line = await prisma.orderLine.findUnique({
+    where: { id: row.order_line_id },
+    select: { nameEn: true, variantLabelEn: true, unitPrice: true },
+  });
+  const lineSummary: ReturnLineSummary | undefined = line
+    ? { name_en: line.nameEn, variant_label_en: line.variantLabelEn, unit_price: line.unitPrice }
+    : undefined;
 
-  return { row, events, refund, order, line: lines[0] };
+  return { row, events, refund, order, line: lineSummary };
 }
 
 export async function approveReturn(id: string, input: ApproveReturnInput, actor: OwnerActor) {
@@ -105,10 +164,16 @@ export async function approveReturn(id: string, input: ApproveReturnInput, actor
     throw badRequest(`Cannot approve more than the requested ${row.requested_qty} units.`);
   }
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'approved', approved_qty = ?, shipping_fee = ?, admin_note = ?, decided_at = NOW(3) WHERE id = ?`,
-    input.approvedQty, input.shippingFee ?? 0, input.note ?? null, row.id,
-  );
+  await prisma.returnRequest.update({
+    where: { id: row.id },
+    data: {
+      status: 'approved',
+      approvedQty: input.approvedQty,
+      shippingFee: input.shippingFee ?? 0,
+      adminNote: input.note ?? null,
+      decidedAt: new Date(),
+    },
+  });
   await addEvent(row.id, 'approved', 'admin', `Approved ${input.approvedQty} unit(s).${input.note ? ' Note: ' + input.note : ''}`, actor.id);
 
   return fetchReturnWithDetails(row.id);
@@ -118,16 +183,33 @@ export async function rejectReturn(id: string, input: RejectReturnInput, actor: 
   const row = await loadReturnOr404(id);
   assertStatus(row, 'requested');
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'rejected', rejection_reason = ?, decided_at = NOW(3) WHERE id = ?`,
-    input.reason, row.id,
-  );
-  // Release reserved quantity
-  await prisma.$executeRawUnsafe(
-    `UPDATE order_lines SET returned_qty = GREATEST(0, returned_qty - ?) WHERE id = ?`,
-    row.requested_qty, row.order_line_id,
-  );
-  await addEvent(row.id, 'rejected', 'admin', `Rejected: ${input.reason}`, actor.id);
+  await prisma.$transaction(async (tx: any) => {
+    await tx.returnRequest.update({
+      where: { id: row.id },
+      data: { status: 'rejected', rejectionReason: input.reason, decidedAt: new Date() },
+    });
+    // Release reserved quantity
+    const line = await tx.orderLine.findUnique({
+      where: { id: row.order_line_id },
+      select: { returnedQty: true },
+    });
+    if (line) {
+      await tx.orderLine.update({
+        where: { id: row.order_line_id },
+        data: { returnedQty: Math.max(0, line.returnedQty - row.requested_qty) },
+      });
+    }
+    await tx.returnEvent.create({
+      data: {
+        id: randomHexId(12),
+        returnId: row.id,
+        type: 'rejected',
+        actor: 'admin',
+        actorId: actor.id,
+        message: `Rejected: ${input.reason}`,
+      },
+    });
+  });
 
   return fetchReturnWithDetails(row.id);
 }
@@ -136,10 +218,15 @@ export async function arrangeReturnPickup(id: string, input: ArrangePickupInput,
   const row = await loadReturnOr404(id);
   assertStatus(row, 'approved');
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'shipping_arranged', shipping_method = 'pickup', pickup_address = ?, return_carrier = ? WHERE id = ?`,
-    input.pickupAddress, input.carrier ?? null, row.id,
-  );
+  await prisma.returnRequest.update({
+    where: { id: row.id },
+    data: {
+      status: 'shipping_arranged',
+      shippingMethod: 'pickup',
+      pickupAddress: input.pickupAddress,
+      returnCarrier: input.carrier ?? null,
+    },
+  });
   await addEvent(row.id, 'pickup_arranged', 'admin', `Pickup arranged.${input.note ? ' ' + input.note : ''}`, actor.id);
 
   return fetchReturnWithDetails(row.id);
@@ -150,10 +237,15 @@ export async function recordReturnShipping(id: string, input: RecordReturnShippi
   const row = await loadReturnOr404(id);
   assertStatus(row, 'approved');
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'in_transit', shipping_method = 'self_ship', customer_carrier = ?, customer_tracking = ? WHERE id = ?`,
-    input.carrier, input.tracking, row.id,
-  );
+  await prisma.returnRequest.update({
+    where: { id: row.id },
+    data: {
+      status: 'in_transit',
+      shippingMethod: 'self_ship',
+      customerCarrier: input.carrier,
+      customerTracking: input.tracking,
+    },
+  });
   await addEvent(row.id, 'in_transit', 'admin', `Return in transit: ${input.carrier} ${input.tracking}`, actor.id);
 
   return fetchReturnWithDetails(row.id);
@@ -166,16 +258,21 @@ export async function receiveReturn(id: string, input: ReceiveReturnInput, actor
     throw badRequest('Received quantity cannot exceed approved quantity.');
   }
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'received', received_qty = ?, received_at = NOW(3) WHERE id = ?`,
-    input.receivedQty, row.id,
-  );
+  await prisma.returnRequest.update({
+    where: { id: row.id },
+    data: { status: 'received', receivedQty: input.receivedQty, receivedAt: new Date() },
+  });
   await addEvent(row.id, 'received', 'admin', `Received ${input.receivedQty} unit(s).${input.note ? ' ' + input.note : ''}`, actor.id);
 
   return fetchReturnWithDetails(row.id);
 }
 
-/** Records the inspection outcome and (optionally) puts the accepted units back into stock. */
+/** Records the inspection outcome and (optionally) puts the accepted units back into stock.
+ *  The restock, the history row, the status update and the timeline event all run in
+ *  ONE transaction — a mid-way failure used to leave stock restored but the return
+ *  un-inspected (or vice versa). The restock is an atomic increment, not
+ *  read-then-write. A missing variant is recorded in the event text instead of
+ *  completing silently with units never returned. */
 export async function inspectReturn(id: string, input: InspectReturnInput, actor: OwnerActor) {
   const row = await loadReturnOr404(id);
   assertStatus(row, 'received');
@@ -184,66 +281,107 @@ export async function inspectReturn(id: string, input: InspectReturnInput, actor
     throw badRequest(`Accepted (${input.acceptedQty}) + rejected (${input.rejectedQty}) cannot exceed received (${received}).`);
   }
 
-  let restockQty = 0;
-  if (input.restockAccepted && input.acceptedQty > 0) {
-    // Restore stock for accepted qty
-    const lines = await prisma.$queryRawUnsafe<Array<{ variant_id: string; sku: string; name_en: string; name_hi: string; variant_label_en: string; product_id: string }>>(
-      `SELECT ol.variantId AS variant_id, ol.sku, ol.nameEn AS name_en, ol.nameHi AS name_hi, ol.variantLabelEn AS variant_label_en, ol.productId AS product_id FROM order_lines ol WHERE ol.id = ?`,
-      row.order_line_id,
-    );
-    if (lines[0]) {
-      const l = lines[0];
-      const variant = await prisma.productVariant.findUnique({
-        where: { id: l.variant_id },
-        select: { stock: true, product: { select: { id: true, nameEn: true, nameHi: true } } },
+  await prisma.$transaction(async (tx: any) => {
+    let restockQty = 0;
+    let restockSkipped = false;
+    if (input.restockAccepted && input.acceptedQty > 0) {
+      // Restore stock for accepted qty
+      const line = await tx.orderLine.findUnique({
+        where: { id: row.order_line_id },
+        select: { variantId: true, sku: true, nameEn: true, nameHi: true, variantLabelEn: true, productId: true },
       });
-      if (variant) {
-        const before = variant.stock;
-        await prisma.productVariant.update({ where: { id: l.variant_id }, data: { stock: before + input.acceptedQty } });
-        await prisma.inventoryAdjustment.create({
-          data: {
-            productId: variant.product.id,
-            variantId: l.variant_id,
-            sku: l.sku,
-            productNameEn: variant.product.nameEn,
-            productNameHi: variant.product.nameHi,
-            variantLabel: l.variant_label_en,
-            before,
-            after: before + input.acceptedQty,
-            delta: input.acceptedQty,
-            reason: 'return_received',
-            note: `Restocked from return ${row.reference}: ${input.acceptedQty} accepted.`,
-            actor: actor.email,
-          },
+      if (line) {
+        const variant = await tx.productVariant.findUnique({
+          where: { id: line.variantId },
+          select: { stock: true, product: { select: { id: true, nameEn: true, nameHi: true } } },
         });
-        restockQty = input.acceptedQty;
+        if (variant) {
+          const updated = await tx.productVariant.updateMany({ where: { id: line.variantId }, data: { stock: { increment: input.acceptedQty } } });
+          if (updated.count === 0) {
+            restockSkipped = true;
+          } else {
+            const afterRow = await tx.productVariant.findUnique({ where: { id: line.variantId }, select: { stock: true } });
+            const after = afterRow?.stock ?? variant.stock + input.acceptedQty;
+            const before = after - input.acceptedQty;
+            await tx.inventoryAdjustment.create({
+              data: adjustmentData({
+                productId: variant.product.id,
+                variantId: line.variantId,
+                sku: line.sku,
+                productNameEn: variant.product.nameEn,
+                productNameHi: variant.product.nameHi,
+                variantLabel: line.variantLabelEn,
+                before,
+                after,
+                reason: 'return_received',
+                note: `Restocked from return ${row.reference}: ${input.acceptedQty} accepted.`,
+                actor: actor.email,
+              }),
+            });
+            restockQty = input.acceptedQty;
+          }
+        } else {
+          restockSkipped = true;
+        }
+      } else {
+        restockSkipped = true;
       }
     }
-  }
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'inspected', accepted_qty = ?, restock_qty = ?, inspected_at = NOW(3), admin_note = CONCAT_WS(' | ', admin_note, ?) WHERE id = ?`,
-    input.acceptedQty, restockQty, input.note ?? null, row.id,
-  );
-  await addEvent(
-    row.id, 'inspected', 'admin',
-    `Inspected: ${input.acceptedQty} accepted, ${input.rejectedQty} rejected.${restockQty ? ' Restocked ' + restockQty + ' units.' : ''}${input.note ? ' ' + input.note : ''}`,
-    actor.id,
-  );
+    // Guarded by status so a concurrent inspection cannot overwrite this one.
+    const updated = await tx.returnRequest.updateMany({
+      where: { id: row.id, status: 'received' },
+      data: {
+        status: 'inspected',
+        acceptedQty: input.acceptedQty,
+        restockQty,
+        inspectedAt: new Date(),
+        adminNote: appendAdminNote(row.admin_note, input.note),
+      },
+    });
+    if (updated.count === 0) {
+      throw conflict('This return is no longer awaiting inspection. Refresh and try again.');
+    }
+    await tx.returnEvent.create({
+      data: {
+        id: randomHexId(12),
+        returnId: row.id,
+        type: 'inspected',
+        actor: 'admin',
+        actorId: actor.id,
+        message: `Inspected: ${input.acceptedQty} accepted, ${input.rejectedQty} rejected.${restockQty ? ' Restocked ' + restockQty + ' units.' : ''}${restockSkipped ? ' Note: the variant no longer exists, so accepted units could not be restocked.' : ''}${input.note ? ' ' + input.note : ''}`,
+      },
+    });
+  });
 
   return fetchReturnWithDetails(row.id);
 }
 
-/** Records the refund for an inspected return and rolls it into the order's refunded total / payment status. */
+/**
+ * Records the refund for an inspected return. All money movement goes through
+ * refund.service's issueOrderRefund (Razorpay for 'original', wallet credit for
+ * 'store_credit', a pending row for manual bank/UPI); the refund row it creates is
+ * then linked to this return through the Prisma Refund model, and only then does
+ * the return move to 'refunded'.
+ *
+ * One refund per return: Refund.returnId is unique, so a second active refund for
+ * the same return is rejected with a clean 409. A previous refund that failed at
+ * the gateway is unlinked (kept for audit under its order) so a retry can proceed.
+ */
 export async function processReturnRefund(id: string, input: ProcessReturnRefundInput, actor: OwnerActor) {
   const row = await loadReturnOr404(id);
   assertStatus(row, 'inspected');
 
-  // Check for existing refund
-  const existingRefunds = await prisma.$queryRawUnsafe<Array<{ amount: number }>>(
-    `SELECT amount FROM refunds WHERE return_id = ?`, row.id,
-  );
-  const alreadyRefunded = existingRefunds.reduce((s, r) => s + r.amount, 0);
+  // Check for an existing refund for this return.
+  const existingRefund = await prisma.refund.findFirst({ where: { returnId: row.id } });
+  if (existingRefund && existingRefund.status !== 'failed') {
+    throw conflict('A refund has already been recorded for this return.');
+  }
+  if (existingRefund) {
+    // Failed at the gateway: free the unique return link so a retry can be recorded.
+    await prisma.refund.update({ where: { id: existingRefund.id }, data: { returnId: null } });
+  }
+  const alreadyRefunded = 0;
   const order = await prisma.order.findUnique({ where: { id: row.order_id } });
   if (!order) throw notFound('Order not found.');
   const returnRemaining = row.refundable_amount - row.shipping_fee - alreadyRefunded;
@@ -253,125 +391,130 @@ export async function processReturnRefund(id: string, input: ProcessReturnRefund
     throw badRequest(`Cannot refund more than the remaining eligible amount (${maxRefund}).`);
   }
 
-  // Determine completed status for non-manual methods
-  const isManual = input.method === 'manual_bank' || input.method === 'manual_upi';
-  const isWalletRefund = input.method === 'store_credit';
-  const status = isManual ? 'pending' : 'completed';
-  const completedAt = isManual ? null : new Date().toISOString();
+  const orderLike: OrderLike = {
+    id: order.id,
+    number: order.number,
+    total: order.total,
+    refundedTotal: order.refundedTotal,
+    paymentStatus: order.paymentStatus,
+    paymentMethod: order.paymentMethod,
+    paymentReference: order.paymentReference ?? '',
+    currency: order.currency,
+    customerId: order.customerId,
+  };
 
-  // Idempotency guard: prevent double wallet refund for same return
-  if (isWalletRefund) {
-    const walletRef = `refund:return:${row.id}`;
-    const existingTx = await prisma.walletTransaction.findUnique({ where: { reference: walletRef } });
-    if (existingTx) throw conflict('A wallet refund has already been issued for this return.');
-
-    // Verify customer has a wallet-capable account (must be an account order)
+  if (input.method === 'store_credit') {
     if (!order.customerId) throw badRequest('Cannot issue a wallet refund for a guest order.');
-  }
-
-  const refundId = randomHexId(12);
-  const newRefundedTotal = order.refundedTotal + input.amount;
-  const newPaymentStatus = newRefundedTotal >= order.total ? 'refunded' : 'partially_refunded';
-
-  if (isWalletRefund) {
-    // Credit wallet atomically in the same transaction as the refund row
-    const walletRef = `refund:return:${row.id}`;
-    let walletTxId!: string;
-    let walletNewBalance!: number;
-
-    await prisma.$transaction(async (tx) => {
-      // Insert refund row as completed immediately
-      await tx.$executeRawUnsafe(
-        `INSERT INTO refunds (id, order_id, return_id, amount, reason, method, status, reference, completed_at, recorded_by, note, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'store_credit', 'completed', ?, NOW(3), ?, ?, NOW(3), NOW(3))`,
-        refundId, row.order_id, row.id, input.amount,
-        `Return ${row.reference}`, walletRef, actor.email, input.note ?? null,
-      );
-
-      // Update order totals — atomic guard against over-refund
-      const updateResult = await tx.order.updateMany({
-        where: {
-          id: row.order_id,
-          // Atomic over-refund guard: refundedTotal + input.amount <= total
-          refundedTotal: { lte: order.total - input.amount },
-        },
-        data: {
-          refundedTotal: newRefundedTotal,
-          paymentStatus: newPaymentStatus,
-        },
-      });
-      if (updateResult.count === 0) {
-        throw conflict('Refund amount would exceed the order total. Possible concurrent refund.');
-      }
-
-      // Credit wallet
-      const result = await creditWallet(order.customerId!, input.amount, 'refund', walletRef, { orderId: order.id, tx });
-      walletTxId = result.txId;
-      walletNewBalance = result.newBalance;
-
-      // Mark return as refunded
-      await tx.$executeRawUnsafe(
-        `UPDATE return_requests SET status = 'refunded', refund_amount = ?, refunded_at = NOW(3) WHERE id = ?`,
-        input.amount, row.id,
-      );
-
-      // Order event
-      await tx.orderEvent.create({
-        data: {
-          orderId: row.order_id,
-          type: 'refund',
-          message: `Refund of ${input.amount} ${order.currency} for return ${row.reference} credited to store wallet.`,
-          actor: 'admin',
-        },
-      });
+    const view = await issueOrderRefund(
+      orderLike,
+      { amount: input.amount, reason: `Return ${row.reference}`, method: 'store_credit', note: input.note },
+      actor.email,
+    );
+    // Link the refund row issueOrderRefund created to this return, then mark the return refunded.
+    await prisma.refund.update({ where: { id: view.id }, data: { returnId: row.id } });
+    await prisma.returnRequest.update({
+      where: { id: row.id },
+      data: { status: 'refunded', refundAmount: input.amount, refundedAt: new Date() },
     });
-
     await addEvent(row.id, 'refunded', 'admin', `Refund of ${input.amount} credited to customer wallet.`, actor.id);
 
-    void emitNotificationEvent({
-      type: 'wallet.refunded',
-      customerId: order.customerId!,
-      amountPaise: input.amount,
-      walletTxId: walletTxId!,
-      returnId: row.id,
-      newBalancePaise: walletNewBalance!,
+    // Notify the customer: the wallet transaction id and new balance live on the
+    // wallet ledger rows issueOrderRefund wrote.
+    const walletTx = view.reference
+      ? await prisma.walletTransaction.findUnique({ where: { reference: view.reference }, select: { id: true } })
+      : null;
+    const balance = await prisma.walletBalance.findUnique({
+      where: { customerId: order.customerId },
+      select: { balancePaise: true },
     });
+    if (walletTx && balance) {
+      void emitNotificationEvent({
+        type: 'wallet.refunded',
+        customerId: order.customerId,
+        amountPaise: input.amount,
+        walletTxId: walletTx.id,
+        returnId: row.id,
+        newBalancePaise: balance.balancePaise,
+      });
+    }
 
     return fetchReturnWithDetails(row.id);
   }
 
-  // Non-wallet refund (manual bank/UPI or other)
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO refunds (id, order_id, return_id, amount, reason, method, status, reference, completed_at, recorded_by, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
-    refundId, row.order_id, row.id, input.amount,
-    `Return ${row.reference}`, input.method, status,
-    input.reference ?? null, completedAt ?? null, actor.email, input.note ?? null,
-  );
+  if (input.method === 'original') {
+    const view = await issueOrderRefund(
+      orderLike,
+      { amount: input.amount, reason: `Return ${row.reference}`, method: 'original' },
+      actor.email,
+    );
+    await prisma.refund.update({ where: { id: view.id }, data: { returnId: row.id } });
+    if (view.status === 'completed') {
+      await prisma.returnRequest.update({
+        where: { id: row.id },
+        data: { status: 'refunded', refundAmount: input.amount, refundedAt: new Date() },
+      });
+      await addEvent(row.id, 'refunded', 'admin', `Refund of ${input.amount} via Razorpay (refund ${view.reference ?? view.id}).`, actor.id);
+    } else {
+      // Gateway accepted the refund but has not settled it yet: the return stays
+      // 'inspected' and the order totals stay put until it completes.
+      await addEvent(
+        row.id,
+        'refunded',
+        'admin',
+        `Razorpay refund ${view.reference ?? view.id} is processing (${input.amount} ${order.currency}). The return will be marked refunded once it settles.`,
+        actor.id,
+      );
+    }
+    return fetchReturnWithDetails(row.id);
+  }
 
-  // Update order refundedTotal and paymentStatus
-  await prisma.order.update({
-    where: { id: row.order_id },
-    data: {
-      refundedTotal: newRefundedTotal,
-      paymentStatus: newPaymentStatus,
-      events: {
-        create: [{
-          type: 'refund',
-          message: `Refund of ${input.amount} ${order.currency} for return ${row.reference}. Method: ${input.method}.${input.reference ? ' Ref: ' + input.reference : ''}`,
-          actor: 'admin',
-        }],
-      },
-    },
+  // Manual bank/UPI: issueOrderRefund records a 'pending' refund (a reference is
+  // mandatory) and moves nothing until an admin verifies it (verifyReturnRefund).
+  const view = await issueOrderRefund(
+    orderLike,
+    { amount: input.amount, reason: `Return ${row.reference}`, method: input.method, reference: input.reference?.trim(), note: input.note },
+    actor.email,
+  );
+  await prisma.refund.update({ where: { id: view.id }, data: { returnId: row.id } });
+  await addEvent(row.id, 'note', 'admin', `Manual refund of ${input.amount} recorded (pending verification, ref ${view.reference ?? input.reference?.trim() ?? '—'}).`, actor.id);
+
+  return fetchReturnWithDetails(row.id);
+}
+
+/**
+ * Verifies a pending manual (bank/UPI) return refund: marks it completed and only then
+ * moves the order totals and the return to 'refunded'. The completion/verification step
+ * manual refunds were missing.
+ */
+export async function verifyReturnRefund(id: string, actor: OwnerActor) {
+  const row = await loadReturnOr404(id);
+  const { refund } = await fetchReturnWithDetails(id);
+  if (!refund) throw notFound('No refund recorded for this return.');
+  if (!['manual_bank', 'manual_upi'].includes(refund.method)) {
+    throw badRequest('Only manual bank/UPI refunds need verification.');
+  }
+  if (refund.status !== 'pending') {
+    throw conflict(`This refund is already '${refund.status}'.`);
+  }
+  const order = await prisma.order.findUnique({ where: { id: row.order_id } });
+  if (!order) throw notFound('Order not found.');
+  await prisma.$transaction(async (tx: any) => {
+    await tx.refund.update({
+      where: { id: refund.id },
+      data: { status: 'completed', completedAt: new Date() },
+    });
+    await applyOrderRefundTotals(
+      tx,
+      order,
+      refund.amount,
+      `Manual refund of ${refund.amount} ${order.currency} verified for return ${row.reference} (ref ${refund.reference ?? '—'}).`,
+    );
+    await tx.returnRequest.update({
+      where: { id: row.id },
+      data: { status: 'refunded', refundAmount: refund.amount, refundedAt: new Date() },
+    });
   });
-
-  // Mark return as refunded
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET status = 'refunded', refund_amount = ?, refunded_at = NOW(3) WHERE id = ?`,
-    input.amount, row.id,
-  );
-  await addEvent(row.id, 'refunded', 'admin', `Refund of ${input.amount} initiated via ${input.method}.${input.reference ? ' Ref: ' + input.reference : ''}`, actor.id);
-
+  await addEvent(row.id, 'refunded', 'admin', `Manual refund of ${refund.amount} verified (ref ${refund.reference ?? '—'}).`, actor.id);
   return fetchReturnWithDetails(row.id);
 }
 
@@ -380,10 +523,10 @@ export async function addReturnNote(id: string, input: AddReturnNoteInput, actor
 
   await addEvent(row.id, 'note', 'admin', input.body, actor.id);
   // Append to admin_note for quick visibility
-  await prisma.$executeRawUnsafe(
-    `UPDATE return_requests SET admin_note = CONCAT_WS(' | ', admin_note, ?) WHERE id = ?`,
-    input.body, row.id,
-  );
+  await prisma.returnRequest.update({
+    where: { id: row.id },
+    data: { adminNote: appendAdminNote(row.admin_note, input.body) },
+  });
 
   return fetchReturnWithDetails(row.id);
 }

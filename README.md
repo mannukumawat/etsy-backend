@@ -1,10 +1,9 @@
 # Your Store — API (`backend/`)
 
-Express + TypeScript + MySQL (Prisma) API for the shop's **catalog**: owner authentication,
-categories, products (options, variants, images, specs) and media.
-
-This is milestone 1. Checkout, orders, customers, coupons, content and settings still run on each
-app's in-memory mock services — see "What this API does not cover yet".
+Express + TypeScript + MySQL (Prisma) API for the shop: public catalog, checkout
+(Razorpay), orders, customers, wallet, coupons, content, settings, newsletter,
+reviews, returns/exchanges, and the owner admin API. Cash on delivery is not
+offered — all orders are prepaid.
 
 ## What it gives you
 
@@ -12,20 +11,28 @@ app's in-memory mock services — see "What this API does not cover yet".
   cookie. Every admin write is rejected without a valid session.
 - **Public catalog.** `/api/products` and `/api/products/:slug` return **only `active` products in
   `isActive` categories**. Draft and archived products 404 even on a direct URL, so an unpublished
-  product is never reachable by guessing its slug.
+  product is never reachable by guessing its slug. The list is server-paginated (default 24 per
+  page) and searchable through a MySQL full-text index on the product search haystack.
+- **Real checkout.** Server-calculated totals, Razorpay orders, signature verification, atomic
+  order placement (stock, coupon, wallet debit in one transaction), and an order webhook that
+  records paid-but-no-order payments for recovery. Refunds go through Razorpay for card/UPI
+  payments and back to the wallet for wallet payments.
 - **Server-side validation.** Unique slugs and catalogue-wide unique SKUs, no negative prices or stock,
   sale price below price, variants matching their options, and stricter rules to publish (image +
   descriptions + price above zero). The apps validate too, but these rules are the authoritative ones.
 - **Atomic writes.** A product and all of its options, values, variants, images and specs are written
   in one transaction: a failure part-way cannot leave a half-saved product.
-- **Durable images.** Image bytes live in the database and are served from `/media/:id`, so both apps
-  resolve the same URL after a restart — no `blob:` URLs, no local file paths.
+- **Images on Cloudinary.** Product and media images are uploaded to Cloudinary when configured
+  (`CLOUDINARY_*` in `.env`) and served from there; without Cloudinary, image bytes live in the
+  database and are served from `/media/:id`.
 
 ## Requirements
 
 - Node.js 18+ (tested on 24)
-- A local MySQL/MariaDB server. **XAMPP works out of the box** — just start MySQL from the XAMPP
+- A MySQL/MariaDB server. **XAMPP works out of the box** — just start MySQL from the XAMPP
   Control Panel; its default `root` account has no password, so no setup is needed on the DB side.
+  MySQL is the only supported database: the schema uses MySQL-only constructs (`FULLTEXT`,
+  `NOW(3)`, `JSON_EXTRACT`), so it does not run on PostgreSQL or SQLite.
 
 ## Setup
 
@@ -33,7 +40,12 @@ From the `backend/` folder — works in cmd.exe, PowerShell and Git Bash:
 
 ```
 npm install
-copy .env.example .env      (PowerShell: Copy-Item .env.example .env)
+```
+
+Create `backend/.env` with the variables in `src/shared/config/env.ts` (`DATABASE_URL`,
+`JWT_SECRET`, `OWNER_EMAIL` / `OWNER_PASSWORD`, Razorpay and Cloudinary keys), then:
+
+```
 npm run db:create           creates the yourstore_dev database (utf8mb4, needed for Hindi text)
 npm run setup                applies migrations, seeds the catalog
 npm run dev                  http://localhost:4000
@@ -56,17 +68,6 @@ If `root` has a password, or you're connecting to a different host/user, run `np
 rewrite `DATABASE_URL` interactively (it percent-encodes the password for you), or edit
 `backend/.env` directly: `mysql://user:password@host:3306/database`.
 
-### Using PostgreSQL or SQLite instead
-
-The schema runs on all three engines — list-ish fields are JSON text rather than native arrays, and
-search uses a pre-lowercased `searchText` column instead of `ILIKE`/`FULLTEXT`. MySQL and PostgreSQL
-both need the `@db.Text` attributes already on the long fields in `prisma/schema.prisma`; remove them
-for SQLite, which doesn't support native type annotations. Then:
-
-1. `prisma/schema.prisma` → `provider = "postgresql"` (or `"sqlite"`)
-2. Point `DATABASE_URL` at the new database
-3. `npx prisma migrate dev --name init && npm run db:seed`
-
 ### Scripts
 
 | Command | What it does |
@@ -74,6 +75,8 @@ for SQLite, which doesn't support native type annotations. Then:
 | `npm run dev` | Start with reload on change (tsx watch) |
 | `npm run build` / `npm start` | Compile to `dist/` and run the compiled server |
 | `npm run typecheck` | TypeScript, no emit |
+| `npm run lint` | ESLint (flat config, `eslint.config.mjs`) |
+| `npm run test` | Vitest. Pure unit tests run anywhere; integration tests need the dev MySQL database from `.env` |
 | `npm run db:migrate` | Create a new migration from schema changes (development) |
 | `npm run db:deploy` | Apply existing migrations (safe for a fresh database or CI) |
 | `npm run db:seed` | Idempotent seed; `SEED_FORCE=1` overwrites existing products |
@@ -91,9 +94,11 @@ UI shifts when you switch to API mode.
 
 ## Environment
 
-See `.env.example`. `DATABASE_URL` must point at a **development** database — `npm run db:reset` drops
-the schema. `JWT_SECRET` signs session cookies; set your own. `OWNER_EMAIL` / `OWNER_PASSWORD` seed the
-single owner account and should be changed before this API is exposed anywhere.
+See `src/shared/config/env.ts` for the full variable list. `DATABASE_URL` must point at a
+**development** database — `npm run db:reset` drops the schema. `JWT_SECRET` signs session cookies;
+set your own. `OWNER_EMAIL` / `OWNER_PASSWORD` seed the single owner account and should be changed
+before this API is exposed anywhere. In production `OWNER_PASSWORD` must be set explicitly (the dev
+default is refused at startup).
 
 ## Endpoints
 
@@ -101,13 +106,19 @@ single owner account and should be changed before this API is exposed anywhere.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | Liveness + database check |
+| GET | `/health` | Liveness + database and schema check |
 | GET | `/api/categories` | Active categories, ordered |
-| GET | `/api/products` | Active products in active categories. `?q=`, `?category=slug,slug`, `?ids=a,b`, `?limit=` |
+| GET | `/api/products` | Active products in active categories. `?q=`, `?category=slug,slug`, `?ids=a,b`, `?page=`, `?limit=` (default 24, max 200) |
 | GET | `/api/products/:slug` | One active product; 404 for draft/archived |
 | GET | `/media/:id` | Image bytes. Public only while referenced by published content (active product/category, store logo, published collection or homepage); otherwise 404 unless the owner is signed in |
 | GET | `/api/orders/track` | `?number=&email=` (rate limited). Trimmed view: status, timeline, lines, totals — no address, phone or email |
 | GET | `/api/orders/:id` | Full order (rate limited, `Cache-Control: no-store`). Account order: signed-in owner of that order only. Guest order: `X-Order-Token` header with the one-time token returned by checkout. Anything else: 404 |
+| POST | `/api/checkout/totals` | Server-calculated preview (shipping, tax, coupon) |
+| POST | `/api/checkout/razorpay/create-order` | Creates the Razorpay order for the previewed total |
+| POST | `/api/checkout/orders` | Places the order (verifies the Razorpay payment) |
+| POST | `/api/newsletter` | Newsletter sign-up |
+| POST | `/api/contact` | Contact form |
+| GET | `/api/i18n/:lng/translation` | Storefront UI strings for one language |
 
 ### Owner session
 
@@ -116,12 +127,14 @@ single owner account and should be changed before this API is exposed anywhere.
 | POST | `/api/admin/auth/login` | `{ email, password }` → sets the session cookie |
 | POST | `/api/admin/auth/logout` | Clears the cookie |
 | GET | `/api/admin/auth/me` | Current owner, or 401 |
+| POST | `/api/admin/auth/forgot-password` | Owner password reset (emailed link, 1 h token) |
+| POST | `/api/admin/auth/reset-password` | Completes the reset |
 
 ### Owner only (401 without a valid session)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/admin/products` | All products, any status. `?q=`, `?status=` |
+| GET | `/api/admin/products` | All products, any status. `?q=`, `?status=`, `?page=`, `?pageSize=` (server-paginated) |
 | GET | `/api/admin/products/:id` | One product, any status |
 | POST | `/api/admin/products` | Create (atomic) |
 | PUT | `/api/admin/products/:id` | Replace (atomic) |
@@ -130,6 +143,8 @@ single owner account and should be changed before this API is exposed anywhere.
 | POST/PUT | `/api/admin/categories[/:id]` | Create / update |
 | GET | `/api/admin/media` | Image metadata (never the bytes) |
 | POST | `/api/admin/media` | Upload `{ fileName, mimeType, base64, alt }` |
+| GET | `/api/admin/orders` | Server-paginated orders. `?q=`, `?fulfilment=`, `?payment=`, `?page=`, `?pageSize=` |
+| GET | `/api/admin/dashboard` | Live dashboard aggregates, `?from=&to=` |
 
 Errors are always `{ "error": { "code", "message", "issues": [{ "path", "message" }] } }`, so the admin
 can show messages next to the right field. Codes: `validation`, `unauthorized`, `forbidden` (missing/invalid
@@ -147,26 +162,17 @@ admin/.env.local      VITE_API_BASE_URL=http://localhost:4000
 
 The admin sends cookies with every request, so its origin must appear in `CORS_ORIGINS`.
 
-## What this API does not cover yet
-
-- Card, UPI and wallet payments: modelled end to end but rejected at checkout until a real gateway is
-  integrated. All orders are prepaid; cash on delivery is not offered.
-- Newsletter sign-up and the contact form (storefront in-memory mocks).
-- Product reviews and ratings (the storefront still ships sample reviews; the API returns none)
-- Storefront search, filtering, sorting and pagination run client-side over the fetched catalog.
-  Moving them into SQL is the natural next step once the catalog grows.
-
 ## Security notes
 
 - Passwords are bcrypt-hashed; session cookies are httpOnly, signed and `SameSite=Lax`.
 - **CSRF:** login also sets a readable `ys_csrf` cookie. Every POST/PUT/PATCH/DELETE from a signed-in owner
-  or customer must echo it in an `X-CSRF-Token` header, or gets 403 (`src/csrf.ts`). Both apps' API clients
+  or customer must echo it in an `X-CSRF-Token` header, or gets 403 (`src/shared/middleware/csrf.middleware.ts`). Both apps' API clients
   do this automatically. A session from before this was added has no CSRF cookie and must sign in again.
-- **Rate limits** (`src/rateLimit.ts`): login (per IP and, separately, per account), registration, password
+- **Rate limits** (`src/shared/middleware/rate-limit.middleware.ts`): login (per IP and, separately, per account), registration, password
   reset request (per IP and per account) and confirm, order lookup/tracking, coupon validation, plus a
   coarse limit on all of `/api`. Counters are **in memory**: correct for one backend process, but each
   extra instance behind a load balancer gets its own counters — use a shared store (e.g. Redis) first.
-- **Proxy:** per-IP limits depend on `TRUST_PROXY` (see `.env.example`). Leave it `false` unless a reverse
+- **Proxy:** per-IP limits depend on `TRUST_PROXY` (see `src/shared/config/env.ts`). Leave it `false` unless a reverse
   proxy sits in front; set it to the exact hop count when one does. Wrong either way breaks per-IP limits.
 - **Headers:** `helmet` sets nosniff, frame, referrer (`no-referrer`) and related headers; HSTS only when
   `NODE_ENV=production`. `Cross-Origin-Resource-Policy: cross-origin` so the apps can load `/media` images.

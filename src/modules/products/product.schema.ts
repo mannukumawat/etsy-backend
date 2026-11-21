@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { localized, SLUG_RE } from '../../shared/validation/common.schema.js';
+import { MAX_STOCK_PER_VARIANT } from '../inventory/inventory.schema.js';
 
 export const SKU_RE = /^[A-Z0-9][A-Z0-9-]{1,39}$/;
 
@@ -18,6 +19,14 @@ export const productInputSchema = z
     categoryId: z.string().min(1, 'Choose a category.'),
     itemGroupId: z.string().nullable().optional(),
     navLinkId: z.string().nullable().optional(),
+    /** M-P1: optional collection assignment (a collections router exists, but products
+     *  could not be assigned to one). */
+    collectionId: z.string().nullable().optional(),
+    /** M-P1: optional barcode (EAN/UPC) for stock-taking. */
+    barcode: z.string().trim().max(64).nullable().default(null),
+    /** M-P1: internal cost price in USD minor units. Admin-only — the storefront
+     *  mapper never returns it. */
+    costPrice: z.number().int().min(0, 'Cost price cannot be negative.').nullable().default(null),
     tags: z.array(z.string().trim().min(1).max(30)).max(20).default([]),
     basePrice: money,
     baseSalePrice: optionalMoney,
@@ -56,7 +65,7 @@ export const productInputSchema = z
           options: z.record(z.string()).default({}),
           price: money,
           salePrice: optionalMoney,
-          stock: z.number().int('Whole numbers only.').min(0, 'Stock cannot be negative.').max(1_000_000),
+          stock: z.number().int('Whole numbers only.').min(0, 'Stock cannot be negative.').max(MAX_STOCK_PER_VARIANT),
           imageIds: z.array(z.string()).default([]),
         }),
       )

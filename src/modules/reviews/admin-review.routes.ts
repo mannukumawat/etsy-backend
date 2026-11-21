@@ -1,13 +1,11 @@
 import { Router } from 'express';
-import { prisma } from '../../shared/database/prisma.js';
-import { notFound } from '../../shared/errors/http-error.js';
 import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
-import { ADMIN_INCLUDE, toAdminReview } from './review.mapper.js';
 import { reviewModerationSchema } from './review.schema.js';
 import { listAdminReviews, moderateReview } from './review.service.js';
 
 // Owner moderation (/api/admin/reviews): hide/restore with a reason and an append-only history.
+// (There is no GET /:id endpoint: the admin only ever calls list + hide/restore.)
 
 export const adminReviewsRouter = Router();
 
@@ -17,15 +15,6 @@ adminReviewsRouter.get(
   '/',
   route(async (req, res) => {
     res.json(await listAdminReviews(req.query));
-  }),
-);
-
-adminReviewsRouter.get(
-  '/:id',
-  route(async (req, res) => {
-    const row = await prisma.review.findUnique({ where: { id: req.params.id }, include: ADMIN_INCLUDE });
-    if (!row) throw notFound('Review not found.');
-    res.json(toAdminReview(row));
   }),
 );
 

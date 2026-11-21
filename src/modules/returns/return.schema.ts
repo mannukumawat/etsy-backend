@@ -7,6 +7,12 @@ export const cancelLineSchema = z.object({
 });
 export type CancelLineInput = z.infer<typeof cancelLineSchema>;
 
+/** Customer whole-order cancellation: cancels every remaining unit of every line. */
+export const cancelWholeOrderSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+export type CancelWholeOrderInput = z.infer<typeof cancelWholeOrderSchema>;
+
 export const createReturnSchema = z.object({
   orderId: z.string().min(1),
   lineId: z.string().min(1),

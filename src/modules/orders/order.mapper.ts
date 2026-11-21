@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { L, Lopt } from '../../shared/utils/localized.js';
+import type { OrderRefundView } from './refund.service.js';
 
 export const ORDER_INCLUDE = {
   lines: true,
@@ -22,7 +23,7 @@ function toStorefrontRateSnapshot(rateSnapshotJson: string) {
   return { base: stored.base, rates: stored.rates, asOf: stored.asOf, illustrative: true as const };
 }
 
-export function toAdminOrder(o: OrderRow, extras?: LineExtras) {
+export function toAdminOrder(o: OrderRow, extras?: LineExtras, refunds?: OrderRefundView[]) {
   return {
     id: o.id,
     number: o.number,
@@ -61,7 +62,11 @@ export function toAdminOrder(o: OrderRow, extras?: LineExtras) {
     // and fulfilment never branches on payment method, so those legacy orders stay readable and
     // fulfilable. No NEW order can be 'cod': the checkout Zod schema rejects it. Do not add 'cod'
     // handling back; if the admin UI needs a label for these old rows, show a generic "Prepaid".
-    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'card' | 'upi' | 'wallet', reference: o.paymentReference },
+    payment: { status: o.paymentStatus as 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded', method: o.paymentMethod as 'card' | 'upi' | 'wallet', reference: o.paymentReference, razorpayOrderId: o.razorpayOrderId ?? null },
+    // Every refund on this order (gateway, manual, wallet) with its real state —
+    // id, method, status and gateway reference — so the admin never has to guess
+    // whether money actually moved.
+    refunds: refunds ?? [],
     fulfilment: {
       status: o.fulfilmentStatus as 'unfulfilled' | 'processing' | 'shipped' | 'delivered' | 'cancelled',
       carrier: o.carrier,

@@ -268,6 +268,39 @@ export async function handleNotificationEvent(event: NotificationEvent): Promise
       break;
     }
 
+    case 'wallet.spend': {
+      await createRecord({
+        kind: 'customer',
+        recipientId: event.customerId,
+        customerId: event.customerId,
+        event: event.type,
+        title: 'Wallet payment',
+        body: `Your wallet was used to pay for your order.`,
+        link: `/account/orders/${event.orderId}`,
+      });
+      break;
+    }
+
+    // M-I5: low-stock alerting. Fired when a stock move takes a variant AT or BELOW
+    // the live threshold (crossing down, not on every move while it stays low — the
+    // 60s dedup in createRecord also collapses bursts). Owner-only, in-app: there is
+    // no owner email/push provider configured (SMTP is still missing), so email/push
+    // remain open until one is. The owner sees it in the admin Notifications inbox.
+    case 'inventory.low_stock': {
+      await createRecord({
+        kind: 'owner',
+        recipientId: 'owner',
+        customerId: null,
+        event: event.type,
+        title: `Low stock: ${event.productName} (${event.sku})`,
+        body: event.stock <= 0
+          ? `${event.productName} (${event.sku}) is out of stock.`
+          : `${event.productName} (${event.sku}) is down to ${event.stock} unit(s) — low-stock threshold is ${event.threshold}.`,
+        link: `/inventory?stock=${event.stock <= 0 ? 'out' : 'low'}`,
+      });
+      break;
+    }
+
     default:
       break;
   }

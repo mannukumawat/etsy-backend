@@ -4,6 +4,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, notFound } from '../../shared/errors/http-error.js';
 import { env, isCloudinaryConfigured } from '../../shared/config/env.js';
+import { errorMessage, logger } from '../../shared/observability/logger.js';
 import type { MediaUploadInput, MediaUrlImportInput } from './media.schema.js';
 
 if (isCloudinaryConfigured) {
@@ -131,6 +132,11 @@ export function listMedia(q: string) {
 }
 
 export async function uploadMedia(input: MediaUploadInput) {
+  // L6: the mime allowlist is enforced here, not just on the URL-import path — an SVG (or any
+  // other type the schema lets through) is rejected with a clear 400 instead of being stored.
+  if (!ALLOWED_IMAGE_TYPES.has(input.mimeType)) {
+    throw badRequest('Only JPEG, PNG, WebP or GIF images can be uploaded.');
+  }
   const data = Buffer.from(input.base64, 'base64');
   if (!data.length) throw badRequest('The uploaded file is empty.');
   if (data.length > MAX_BYTES) throw badRequest('Images must be 5 MB or smaller.');
@@ -204,4 +210,21 @@ export async function importMediaFromUrl(input: MediaUrlImportInput) {
     },
     select: METADATA_SELECT,
   });
+}
+
+/**
+ * Delete a media row and, when it lives on Cloudinary, destroy the asset there too.
+ * The Cloudinary destroy is best-effort and never fails the delete: a missing asset, an
+ * unconfigured Cloudinary, or a network error still removes the row (an orphaned remote
+ * asset is harmless; a row pointing at a deleted asset is not).
+ */
+export async function deleteMedia(id: string): Promise<void> {
+  const row = await prisma.media.findUnique({ where: { id }, select: { id: true, cloudinaryId: true } });
+  if (!row) throw notFound('Image not found.');
+  if (row.cloudinaryId && isCloudinaryConfigured) {
+    await cloudinary.uploader.destroy(row.cloudinaryId).catch((err) => {
+      logger.warn('cloudinary destroy failed for deleted media', { mediaId: id, cloudinaryId: row.cloudinaryId, error: errorMessage(err) });
+    });
+  }
+  await prisma.media.delete({ where: { id } });
 }

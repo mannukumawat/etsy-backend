@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
 import { toHelpArticle, toHelpCategory } from './help.mapper.js';
-import { helpCategoryInputSchema } from './help.schema.js';
+import { helpArticleInputSchema, helpCategoryInputSchema } from './help.schema.js';
 import {
   createHelpArticle,
   createHelpCategory,
@@ -46,11 +46,15 @@ adminHelpRouter.get('/categories/:catId/articles', route(async (req, res) => {
 }));
 
 adminHelpRouter.post('/categories/:catId/articles', route(async (req, res) => {
-  res.status(201).json(toHelpArticle(await createHelpArticle(req.params.catId, req.body)));
+  const data = helpArticleInputSchema.parse(req.body);
+  res.status(201).json(toHelpArticle(await createHelpArticle(req.params.catId, data)));
 }));
 
 adminHelpRouter.patch('/categories/:catId/articles/:id', route(async (req, res) => {
-  res.json(toHelpArticle(await updateHelpArticle(req.params.catId, req.params.id, req.body)));
+  // Partial: an update may change a single field; the service merges with the stored row
+  // and validates the complete article (help.service.ts), so this only rejects bad fields.
+  const data = helpArticleInputSchema.partial().parse(req.body);
+  res.json(toHelpArticle(await updateHelpArticle(req.params.catId, req.params.id, data)));
 }));
 
 adminHelpRouter.delete('/categories/:catId/articles/:id', route(async (req, res) => {

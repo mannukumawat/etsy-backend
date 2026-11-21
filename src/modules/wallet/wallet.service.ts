@@ -6,18 +6,6 @@ import type { Prisma } from '@prisma/client';
 // All amounts in INR paise (integer). Negative balances are NEVER permitted.
 // Every mutation uses a Prisma transaction so the balance and ledger row are always consistent.
 
-/** Gets (or creates) the wallet balance row for a customer. */
-export async function getOrCreateBalance(customerId: string, tx?: Prisma.TransactionClient) {
-  const db = tx ?? prisma;
-  // Upsert: create with 0 if not present
-  const bal = await db.walletBalance.upsert({
-    where: { customerId },
-    update: {},
-    create: { customerId, balancePaise: 0 },
-  });
-  return bal;
-}
-
 /** Returns the current balance in paise for a customer (0 if no wallet row yet). */
 export async function getBalance(customerId: string): Promise<number> {
   const bal = await prisma.walletBalance.findUnique({ where: { customerId } });

@@ -12,7 +12,8 @@ uiI18nPublicRouter.get(
     const { lng } = req.params;
     if (!isSupportedUiLang(lng)) return res.json({});
     const overrides = await loadOverrides(bundleLang(lng));
-    res.set('Cache-Control', 'public, max-age=60');
+    // M20: the edge needs s-maxage to cache this at all — max-age alone only governs the browser.
+    res.set('Cache-Control', 'public, max-age=60, s-maxage=60');
     res.json(overrides);
   }),
 );

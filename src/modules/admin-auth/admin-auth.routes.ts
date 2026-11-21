@@ -5,8 +5,9 @@ import { CSRF_COOKIE, issueCsrfCookie } from '../../shared/middleware/csrf.middl
 import { env } from '../../shared/config/env.js';
 import { route } from '../../shared/http/async-route.js';
 import { unauthorized } from '../../shared/errors/http-error.js';
-import { ownerLoginAccountLimiter, ownerLoginIpLimiter } from '../../shared/middleware/rate-limit.middleware.js';
-import { loginSchema } from './admin-auth.schema.js';
+import { ownerLoginAccountLimiter, ownerLoginIpLimiter, passwordResetAccountLimiter, passwordResetConfirmLimiter, passwordResetIpLimiter } from '../../shared/middleware/rate-limit.middleware.js';
+import { forgotPasswordSchema, loginSchema, resetPasswordSchema } from './admin-auth.schema.js';
+import { requestPasswordReset, resetPassword } from './password-reset.service.js';
 
 export const adminAuthRouter = Router();
 
@@ -23,10 +24,32 @@ adminAuthRouter.post(
   }),
 );
 
-adminAuthRouter.post('/logout', (_req, res) => {
-  clearSession(res);
+adminAuthRouter.post('/logout', (req, res) => {
+  clearSession(res, req.cookies?.ys_owner_session);
   res.json({ ok: true });
 });
+
+/** Request a password-reset link. Always answers { ok: true, delivered } — even for
+ *  unknown emails — so the endpoint never reveals whether an account exists. */
+adminAuthRouter.post(
+  '/forgot-password',
+  passwordResetIpLimiter,
+  passwordResetAccountLimiter,
+  route(async (req, res) => {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    res.json(await requestPasswordReset(email));
+  }),
+);
+
+/** Consume a reset link token and set a new password. The token is single-use. */
+adminAuthRouter.post(
+  '/reset-password',
+  passwordResetConfirmLimiter,
+  route(async (req, res) => {
+    const { token, password } = resetPasswordSchema.parse(req.body);
+    res.json(await resetPassword(token, password, req.cookies?.ys_owner_session));
+  }),
+);
 
 adminAuthRouter.get('/me', requireOwner, (req, res) => {
   const existingToken = (req.cookies as Record<string, string> | undefined)?.[CSRF_COOKIE];

@@ -1,13 +1,13 @@
-// Catalog schema for milestone 1: owner auth, categories, products (with options, variants, images,
-// specs) and media. Checkout, orders, coupons and settings stay in the apps' mock services for now.
+// Catalog schema: owner auth, categories, products (with options, variants, images,
+// specs) and media, plus checkout, orders, coupons, settings, wallet, returns,
+// exchanges, refunds and notifications — all backed by Prisma + MySQL.
 //
 // Money is stored as integer minor units in the USD base currency, matching both apps.
 // Localized text is stored as paired `...En` / `...Hi` columns so it can be queried and indexed.
 //
-// PORTABILITY: this runs on MySQL/MariaDB (e.g. XAMPP), and the same schema also runs on PostgreSQL
-// or SQLite by switching the provider below. List-ish fields (tags, imageIds, variant options) are
-// stored as JSON text rather than native arrays, and search uses a pre-lowercased `searchText` column
-// instead of ILIKE/FULLTEXT, precisely so every engine behaves identically.
+// ENGINE: MySQL only (Aiven MySQL in dev; MySQL on the production host). The schema uses
+// MySQL-only constructs (DATETIME(3), FULLTEXT, information_schema checks in migrations),
+// so do not switch the provider below — PostgreSQL/SQLite are not supported.
 //
 // MySQL note: Prisma's default native type for `String` is VARCHAR(191) — enough for ids, slugs, SKUs
 // and short labels, but too short for descriptions and JSON blobs, which are marked `@db.Text` below.
@@ -105,6 +105,14 @@ model Product {
   categoryId         String
   itemGroupId        String?
   navLinkId          String?
+  /// Optional collection this product belongs to (M-P1). No storefront behaviour
+  /// changes: collections render their own sections; this is the assignment.
+  collectionId       String?
+  /// Optional barcode (EAN/UPC/SKU barcode) for stock-taking and POS.
+  barcode            String?
+  /// Internal cost price in USD minor units (M-P1). NEVER exposed to the storefront
+  /// (toStorefrontProduct omits it) or to customers — admin only.
+  costPrice          Int?
   /// JSON array of strings.
   tags               String   @default("[]") @db.Text
   /// Lowercase, space-separated haystack of name + tags + SKUs for search.
@@ -139,6 +147,7 @@ model Product {
   category     Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   itemGroup    ItemGroup?       @relation(fields: [itemGroupId], references: [id], onDelete: SetNull)
   navLink      NavLink?         @relation(fields: [navLinkId], references: [id], onDelete: SetNull)
+  collection   Collection?      @relation(fields: [collectionId], references: [id], onDelete: SetNull)
   images       ProductImage[]
   options      ProductOption[]
   variants     ProductVariant[]
@@ -150,6 +159,8 @@ model Product {
   @@index([categoryId])
   @@index([itemGroupId])
   @@index([navLinkId])
+  @@index([collectionId])
+  @@fulltext([searchText])
   @@map("products")
 }
 
@@ -271,6 +282,11 @@ model ShippingSettings {
   id                   String   @id @default("singleton")
   unsupportedMessageEn String   @default("We don't currently ship to this destination.") @db.Text
   unsupportedMessageHi String   @default("") @db.Text
+  /// Free-shipping order-value threshold in USD minor units (M-S2). Null = no
+  /// threshold (shipping is always charged per the zone rate). When set, an order
+  /// whose goods subtotal (after discounts, before shipping/tax) reaches this value
+  /// ships free in every zone.
+  freeShippingThreshold Int?
   updatedAt            DateTime @updatedAt
 
   zones ShippingZone[]
@@ -459,7 +475,7 @@ model CouponRedemption {
   coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
   order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
-  @@index([couponId, customerKey])
+  @@unique([couponId, customerKey])
   @@map("coupon_redemptions")
 }
 
@@ -591,7 +607,14 @@ model Order {
   paymentMethod       String
   /// 'unpaid' | 'paid' | 'failed' | 'partially_refunded' | 'refunded'
   paymentStatus       String    @default("unpaid")
-  paymentReference    String    @default("")
+  /// Razorpay order id for this order's gateway charge (null for full-wallet orders).
+  razorpayOrderId     String?   @db.VarChar(255)
+  /// Razorpay payment id for this order's gateway charge — the refund/reconciliation
+  /// key. Null for full-wallet orders. UNIQUE: one gateway payment can fund at most
+  /// one order, so a retried place-order with the same payment id replays instead of
+  /// creating a second paid order. (Legacy rows created before this column existed
+  /// carry NULL; the old "" default is migrated to NULL.)
+  paymentReference    String?   @db.VarChar(255)
   /// 'unfulfilled' | 'processing' | 'shipped' | 'delivered' | 'cancelled'
   fulfilmentStatus    String    @default("unfulfilled")
   carrier             String?
@@ -611,6 +634,9 @@ model Order {
   @@index([customerId])
   @@index([customerEmail])
   @@index([createdAt])
+  @@index([fulfilmentStatus])
+  @@index([razorpayOrderId])
+  @@unique([paymentReference])
   @@map("orders")
 }
 
@@ -630,6 +656,19 @@ model OrderLine {
   unitPrice      Int
   quantity       Int
   lineTotal      Int
+  /// Units of this line cancelled by the customer (paid lines refund on cancel).
+  cancelledQty      Int       @default(0) @map("cancelled_qty")
+  /// Units of this line returned and accepted after delivery.
+  returnedQty       Int       @default(0) @map("returned_qty")
+  /// Units of this line swapped out by an exchange.
+  exchangedQty      Int       @default(0) @map("exchanged_qty")
+  /// When this line was delivered (set when the order advances to delivered); the
+  /// return window is measured from here, never from order.updatedAt.
+  deliveredAt       DateTime? @map("delivered_at")
+  /// Per-line return-window override in days (null = product.returnDays, else 7).
+  returnWindowDays  Int?      @map("return_window_days")
+  /// Return shipping fee charged for this line, in the order currency's minor units.
+  returnShippingFee Int       @default(0) @map("return_shipping_fee")
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -728,6 +767,7 @@ model Collection {
   heroImage Media?              @relation(fields: [heroImageId], references: [id], onDelete: SetNull)
   circles   CollectionCircle[]
   sections  CollectionSection[]
+  products  Product[]
 
   @@index([status, displayOrder])
   @@map("collections")
@@ -851,6 +891,20 @@ model ContactMessage {
 
   @@index([status, createdAt])
   @@map("contact_messages")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Newsletter subscribers — footer signup (POST /api/newsletter). One row per email; a repeat
+// signup for the same email is a no-op success, never an error.
+// ---------------------------------------------------------------------------------------------
+
+model NewsletterSubscriber {
+  id             String    @id @default(cuid())
+  email          String    @unique @db.VarChar(200)
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+
+  @@map("newsletter_subscribers")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -979,78 +1033,220 @@ model WalletTopup {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Returns & Refunds — tables created via migrate-returns.ts (raw SQL).
-// These model blocks are for IDE documentation only. Do NOT run prisma generate/db push
-// while the server holds the query_engine DLL. All access uses prisma.$queryRaw / $executeRaw.
+// Returns, exchanges & refunds — real Prisma models since the 20261121010000 migration.
+// The tables were previously created by one-shot scripts (migrate-returns.ts /
+// migrate-exchanges.ts, now deleted); the migration creates the same tables with
+// CREATE TABLE IF NOT EXISTS, so existing dev databases keep their data.
+// These models deliberately carry NO relations: returns/exchanges/refunds reference
+// orders/lines by id only, so deleting an order never cascades into refund history.
 // ---------------------------------------------------------------------------------------------
-// Additional columns on order_lines (added by migration):
-//   cancelled_qty INT DEFAULT 0
-//   returned_qty  INT DEFAULT 0
-//   delivered_at  DATETIME NULL
-//   return_window_days INT NULL
-//   return_shipping_fee INT DEFAULT 0
-//
-// model ReturnRequest {
-//   id              String    -- cuid hex
-//   reference       String    -- unique, e.g. RET-ABCD1234
-//   orderId         String
-//   orderLineId     String
-//   variantId       String
-//   requestedQty    Int
-//   approvedQty     Int?
-//   receivedQty     Int?
-//   acceptedQty     Int?
-//   restockQty      Int?
-//   reason          String    -- damaged|wrong_item|not_as_described|changed_mind|quality_issue|other
-//   customerNote    String?
-//   adminNote       String?
-//   rejectionReason String?
-//   photos          Text?     -- JSON string[]
-//   status          String    -- requested|approved|rejected|shipping_arranged|in_transit|received|inspected|refunded|withdrawn|closed
-//   shippingMethod  String?   -- self_ship|pickup
-//   customerCarrier String?
-//   customerTracking String?
-//   pickupAddress   String?
-//   returnCarrier   String?
-//   returnTracking  String?
-//   refundableAmount Int
-//   shippingFee     Int DEFAULT 0
-//   refundAmount    Int?
-//   returnWindowDays Int DEFAULT 7
-//   requestedAt     DateTime
-//   decidedAt       DateTime?
-//   receivedAt      DateTime?
-//   inspectedAt     DateTime?
-//   refundedAt      DateTime?
-//   @@map("return_requests")
-// }
-//
-// model ReturnEvent {
-//   id         String
-//   returnId   String
-//   type       String    -- requested|approved|rejected|pickup_arranged|in_transit|received|inspected|refunded|withdrawn|note
-//   actor      String    -- customer|admin|system
-//   actorId    String?
-//   message    String?
-//   data       String?
-//   createdAt  DateTime
-//   @@map("return_events")
-// }
-//
-// model Refund {
-//   id          String
-//   orderId     String
-//   returnId    String?   -- null for direct admin refunds
-//   amount      Int
-//   reason      String
-//   method      String    -- original|manual_bank|manual_upi|store_credit
-//   status      String    -- pending|processing|completed|failed
-//   reference   String?
-//   completedAt DateTime?
-//   failedAt    DateTime?
-//   recordedBy  String?   -- admin email
-//   note        String?
-//   createdAt   DateTime
-//   updatedAt   DateTime
-//   @@map("refunds")
-// }
+
+/// A customer return request for one order line.
+/// 'requested' | 'approved' | 'rejected' | 'shipping_arranged' | 'in_transit' | 'received' | 'inspected' | 'refunded' | 'withdrawn' | 'closed'
+model ReturnRequest {
+  id                  String    @id @default(cuid()) @map("id")
+  reference           String    @unique @db.VarChar(191) @map("reference")
+  orderId             String    @db.VarChar(191) @map("order_id")
+  orderLineId         String    @db.VarChar(191) @map("order_line_id")
+  variantId           String    @db.VarChar(191) @map("variant_id")
+  requestedQty        Int @map("requested_qty")
+  approvedQty         Int? @map("approved_qty")
+  receivedQty         Int? @map("received_qty")
+  acceptedQty         Int? @map("accepted_qty")
+  restockQty          Int? @map("restock_qty")
+  /// damaged | wrong_item | not_as_described | changed_mind | quality_issue | other
+  reason              String    @db.VarChar(191) @map("reason")
+  customerNote        String?   @db.Text @map("customer_note")
+  adminNote           String?   @db.Text @map("admin_note")
+  rejectionReason     String?   @db.Text @map("rejection_reason")
+  /// JSON string[] of photo URLs.
+  photos              String?   @db.Text @map("photos")
+  status              String    @default("requested") @db.VarChar(50) @map("status")
+  /// self_ship | pickup
+  shippingMethod      String?   @db.VarChar(50) @map("shipping_method")
+  customerCarrier     String?   @db.VarChar(191) @map("customer_carrier")
+  customerTracking    String?   @db.VarChar(191) @map("customer_tracking")
+  pickupAddress       String?   @db.Text @map("pickup_address")
+  returnCarrier       String?   @db.VarChar(191) @map("return_carrier")
+  returnTracking      String?   @db.VarChar(191) @map("return_tracking")
+  refundableAmount    Int       @default(0) @map("refundable_amount")
+  shippingFee         Int       @default(0) @map("shipping_fee")
+  refundAmount        Int? @map("refund_amount")
+  returnWindowDays    Int       @default(7) @map("return_window_days")
+  /// Bank account / UPI id chosen for a manual refund (see refund_method_override).
+  refundAccountId     String?   @db.VarChar(191) @map("refund_account_id")
+  refundMethodOverride String?  @db.VarChar(50) @map("refund_method_override")
+  requestedAt         DateTime  @default(now()) @map("requested_at")
+  decidedAt           DateTime? @map("decided_at")
+  receivedAt          DateTime? @map("received_at")
+  inspectedAt         DateTime? @map("inspected_at")
+  refundedAt          DateTime? @map("refunded_at")
+
+  @@index([orderId])
+  @@index([status])
+  @@map("return_requests")
+}
+
+/// Timeline events for a return request.
+model ReturnEvent {
+  id        String   @id @default(cuid()) @map("id")
+  returnId  String   @db.VarChar(191) @map("return_id")
+  /// requested | approved | rejected | pickup_arranged | in_transit | received | inspected | refunded | withdrawn | refund_issued | note
+  type      String   @db.VarChar(100) @map("type")
+  /// customer | admin | system
+  actor     String   @db.VarChar(50) @map("actor")
+  actorId   String?  @db.VarChar(191) @map("actor_id")
+  message   String?  @db.Text @map("message")
+  data      String?  @db.Text @map("data")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([returnId])
+  @@map("return_events")
+}
+
+/// One money movement back to a customer. 'original' = back to the gateway payment
+/// method (Razorpay refund); 'manual_bank' / 'manual_upi' = owner transfers the money
+/// and marks it completed with proof; 'store_credit' = wallet credit.
+/// 'pending' | 'processing' | 'completed' | 'failed'
+model Refund {
+  id          String    @id @default(cuid()) @map("id")
+  orderId     String    @db.VarChar(191) @map("order_id")
+  /// Null for direct admin refunds not tied to a return.
+  returnId    String?   @unique @db.VarChar(191) @map("return_id")
+  amount      Int @map("amount")
+  reason      String    @db.Text @map("reason")
+  method      String    @default("original") @db.VarChar(50) @map("method")
+  status      String    @default("pending") @db.VarChar(50) @map("status")
+  /// Gateway refund id (Razorpay) or the manual transfer reference.
+  reference   String?   @db.VarChar(191) @map("reference")
+  completedAt DateTime? @map("completed_at")
+  failedAt    DateTime? @map("failed_at")
+  /// Admin email that recorded the refund.
+  recordedBy  String?   @db.VarChar(191) @map("recorded_by")
+  note        String?   @db.Text @map("note")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@map("refunds")
+}
+
+/// A customer exchange request: swap one order line's variant for another.
+/// 'requested' | 'approved' | 'rejected' | 'shipped' | 'delivered' | 'closed'
+model ExchangeRequest {
+  id                   String    @id @default(cuid()) @map("id")
+  reference            String    @unique @db.VarChar(191) @map("reference")
+  orderId              String    @db.VarChar(191) @map("order_id")
+  orderLineId          String    @db.VarChar(191) @map("order_line_id")
+  originalVariantId    String    @db.VarChar(191) @map("original_variant_id")
+  replacementVariantId String    @db.VarChar(191) @map("replacement_variant_id")
+  requestedQty         Int @map("requested_qty")
+  approvedQty          Int? @map("approved_qty")
+  reason               String    @db.VarChar(191) @map("reason")
+  customerNote         String?   @db.Text @map("customer_note")
+  adminNote            String?   @db.Text @map("admin_note")
+  rejectionReason      String?   @db.Text @map("rejection_reason")
+  status               String    @default("requested") @db.VarChar(50) @map("status")
+  /// Replacement price minus original line price, in the ORDER currency's minor
+  /// units (converted prices on both sides — never USD-base vs converted). Positive
+  /// = customer owes the difference; negative = customer is refunded it.
+  priceDifference      Int       @default(0) @map("price_difference")
+  exchangeWindowDays   Int       @default(7) @map("exchange_window_days")
+  replacementCarrier   String?   @db.VarChar(191) @map("replacement_carrier")
+  replacementTracking  String?   @db.VarChar(191) @map("replacement_tracking")
+  requestedAt          DateTime  @default(now()) @map("requested_at")
+  decidedAt            DateTime? @map("decided_at")
+  shippedAt            DateTime? @map("shipped_at")
+  deliveredAt          DateTime? @map("delivered_at")
+  closedAt             DateTime? @map("closed_at")
+
+  @@index([orderId])
+  @@index([orderLineId])
+  @@index([status])
+  @@map("exchange_requests")
+}
+
+/// Timeline events for an exchange request.
+model ExchangeEvent {
+  id         String   @id @default(cuid()) @map("id")
+  exchangeId String   @db.VarChar(191) @map("exchange_id")
+  /// requested | approved | rejected | shipped | delivered | closed | payment_recorded | refund_issued | original_restocked | note
+  type       String   @db.VarChar(100) @map("type")
+  /// customer | admin | system
+  actor      String   @db.VarChar(50) @map("actor")
+  actorId    String?  @db.VarChar(191) @map("actor_id")
+  message    String?  @db.Text @map("message")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([exchangeId])
+  @@map("exchange_events")
+}
+
+/// A customer's saved bank account for manual refunds. The account number is stored
+/// AES-256-GCM encrypted (see bank-account.crypto.ts); only the last 4 digits are
+/// ever readable without the key.
+model CustomerBankAccount {
+  id                     String   @id @default(cuid()) @map("id")
+  customerId             String   @db.VarChar(191) @map("customer_id")
+  accountHolderName      String   @db.VarChar(255) @map("account_holder_name")
+  accountNumberEncrypted String   @db.Text @map("account_number_encrypted")
+  accountNumberLast4     String   @db.Char(4) @map("account_number_last4")
+  ifscCode               String   @db.VarChar(11) @map("ifsc_code")
+  isActive               Boolean  @default(true) @map("is_active")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  @@index([customerId])
+  @@map("customer_bank_accounts")
+}
+
+/// A short-lived stock reservation created when a Razorpay order is created at
+/// checkout, so the last unit cannot be sold twice while the customer is in the
+/// Razorpay modal. Consumed (deleted) when placeOrder succeeds; expired rows are
+/// swept on every create-order call and never block stock past `expiresAt`.
+/// Stock availability checks subtract unexpired holds.
+model StockHold {
+  id              String   @id @default(cuid())
+  variantId       String   @db.VarChar(191)
+  quantity        Int
+  razorpayOrderId String   @db.VarChar(255)
+  customerKey     String?  @db.VarChar(191)
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@unique([razorpayOrderId, variantId])
+  @@index([variantId, expiresAt])
+  @@map("stock_holds")
+}
+
+/// Revoked JWTs (logout / password change). Only the sha256 of the token id is
+/// stored; rows are swept once expired. Checked by both auth middlewares.
+model RevokedSession {
+  id        String   @id @default(cuid())
+  jtiHash   String   @unique @db.VarChar(64)
+  /// 'owner' | 'customer'
+  realm     String   @db.VarChar(20)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("revoked_sessions")
+}
+
+/// A Razorpay order created at checkout (L4). The row binds the gateway order to the
+/// server-computed amount/currency and to the requester, and the receipt is always
+/// the idempotency key (server-derived, never client-supplied), so a later
+/// placeOrder can only ever match the order created for the same checkout attempt.
+model RazorpayOrder {
+  id              String   @id @default(cuid())
+  razorpayOrderId String   @unique @db.VarChar(255)
+  amount          Int
+  currency        String   @db.VarChar(10)
+  receipt         String   @db.VarChar(40)
+  customerKey     String?  @db.VarChar(191)
+  /// 'created' | 'paid' | 'expired'
+  status          String   @default("created") @db.VarChar(20)
+  createdAt       DateTime @default(now())
+
+  @@index([customerKey])
+  @@map("razorpay_orders")
+}

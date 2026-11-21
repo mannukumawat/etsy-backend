@@ -12,6 +12,22 @@ import { CONTENT_LANGS, type ContentLang, type UpsertTranslationInput } from './
 
 export const sourceHash = sha256Hex;
 
+/**
+ * Per-instance translation cache (M18): a translated response used to cost one
+ * `contentTranslation` query per response. Rows are now cached for 60 seconds —
+ * translations change only when an owner saves one (see saveTranslation, which
+ * invalidates the edited entry), so a minute of staleness is the trade for not
+ * hitting the database on every translated GET. Negative entries (no translation
+ * for that text) are cached too, so a fully untranslated page costs no query at
+ * all while its entries are fresh. Guarded by a size cap so the map cannot grow
+ * without bound over the instance lifetime.
+ */
+const TRANSLATION_CACHE_TTL_MS = 60_000;
+const TRANSLATION_CACHE_MAX_ENTRIES = 5000;
+const translationCache = new Map<string, { text: string | null; cachedAt: number }>();
+
+const translationCacheKey = (lang: ContentLang, hash: string): string => `${lang}:${hash}`;
+
 export type Localized = { en: string; [k: string]: unknown };
 const isLocalized = (v: unknown): v is Localized => !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as Localized).en === 'string';
 
@@ -30,8 +46,28 @@ export async function translateBody(body: unknown, lang: ContentLang): Promise<v
   collectLocalized(body, nodes);
   const sources = [...new Set(nodes.map((n) => n.en.trim()).filter(Boolean))];
   if (!sources.length) return;
-  const rows = await prisma.contentTranslation.findMany({ where: { lang, sourceHash: { in: sources.map(sourceHash) } }, select: { sourceHash: true, text: true } });
-  const byHash = new Map(rows.map((r) => [r.sourceHash, r.text]));
+  const hashes = [...new Set(sources.map(sourceHash))];
+  const now = Date.now();
+  const byHash = new Map<string, string>();
+  const missing: string[] = [];
+  for (const h of hashes) {
+    const hit = translationCache.get(translationCacheKey(lang, h));
+    if (hit && now - hit.cachedAt < TRANSLATION_CACHE_TTL_MS) {
+      if (hit.text) byHash.set(h, hit.text);
+    } else {
+      missing.push(h);
+    }
+  }
+  if (missing.length) {
+    const rows = await prisma.contentTranslation.findMany({ where: { lang, sourceHash: { in: missing } }, select: { sourceHash: true, text: true } });
+    const found = new Map<string, string>(rows.map((r: { sourceHash: string; text: string }) => [r.sourceHash, r.text] as const));
+    if (translationCache.size > TRANSLATION_CACHE_MAX_ENTRIES) translationCache.clear();
+    for (const h of missing) {
+      const text = found.get(h) ?? null;
+      translationCache.set(translationCacheKey(lang, h), { text, cachedAt: now });
+      if (text) byHash.set(h, text);
+    }
+  }
   for (const n of nodes) {
     const t = byHash.get(sourceHash(n.en.trim()));
     if (t) n[lang] = t;
@@ -156,6 +192,8 @@ export async function listTranslations({ q, status, lang, page, pageSize }: Tran
 /** Empty text removes the translation (that string then shows in English). */
 export async function saveTranslation({ source, lang, text }: UpsertTranslationInput): Promise<{ removed: boolean }> {
   const hash = sourceHash(source);
+  // The cached row (or cached miss) for this text is stale the moment it is saved.
+  translationCache.delete(translationCacheKey(lang, hash));
   if (!text) {
     await prisma.contentTranslation.deleteMany({ where: { lang, sourceHash: hash } });
     return { removed: true };

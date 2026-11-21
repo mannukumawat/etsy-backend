@@ -139,3 +139,42 @@ export const reviewWriteLimiter = rateLimit({
   limit: 20,
   handler: jsonHandler('Too many review changes from this network. Please try again later.', REVIEW_WRITE_WINDOW_MS),
 });
+
+/** Checkout money endpoints (POST /checkout/totals, /orders, /razorpay/create-order): 60/min per
+ *  IP. Tight enough to slow scripted checkout abuse; the global 300/min floor still applies. */
+const CHECKOUT_WINDOW_MS = 60_000;
+export const checkoutLimiter = rateLimit({
+  ...base,
+  windowMs: CHECKOUT_WINDOW_MS,
+  limit: 60,
+  handler: jsonHandler('Too many checkout requests from this network. Please wait a moment and try again.', CHECKOUT_WINDOW_MS),
+});
+
+/** Wallet top-up create/verify: 30/min per IP — top-ups move money, so they get a tighter
+ *  limit than plain checkout reads. */
+const TOPUP_WINDOW_MS = 60_000;
+export const topupLimiter = rateLimit({
+  ...base,
+  windowMs: TOPUP_WINDOW_MS,
+  limit: 30,
+  handler: jsonHandler('Too many wallet top-up requests from this network. Please wait a moment and try again.', TOPUP_WINDOW_MS),
+});
+
+/** Newsletter subscribe/unsubscribe: 10/min per IP — anonymous endpoints are cheap to spam. */
+const NEWSLETTER_WINDOW_MS = 60_000;
+export const newsletterLimiter = rateLimit({
+  ...base,
+  windowMs: NEWSLETTER_WINDOW_MS,
+  limit: 10,
+  handler: jsonHandler('Too many newsletter requests from this network. Please wait a moment and try again.', NEWSLETTER_WINDOW_MS),
+});
+
+/** Contact form: 10/min per IP — anonymous, so it gets its own limiter instead of relying
+ *  on the coarse global floor. */
+const CONTACT_WINDOW_MS = 60_000;
+export const contactLimiter = rateLimit({
+  ...base,
+  windowMs: CONTACT_WINDOW_MS,
+  limit: 10,
+  handler: jsonHandler('Too many messages from this network. Please wait a moment and try again.', CONTACT_WINDOW_MS),
+});

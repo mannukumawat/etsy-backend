@@ -11,8 +11,10 @@ const mocks = vi.hoisted(() => {
     productImage: { deleteMany: vi.fn(), createMany: vi.fn() },
     productOption: { deleteMany: vi.fn(), create: vi.fn() },
     productOptionValue: { deleteMany: vi.fn() },
-    productVariant: { deleteMany: vi.fn(), createMany: vi.fn() },
+    productVariant: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     productSpec: { deleteMany: vi.fn(), createMany: vi.fn() },
+    inventoryAdjustment: { createMany: vi.fn() },
+    $executeRawUnsafe: vi.fn(),
   };
   return {
     tx,
@@ -22,6 +24,8 @@ const mocks = vi.hoisted(() => {
       category: { findUnique: vi.fn() },
       productVariant: { findMany: vi.fn() },
       media: { findMany: vi.fn() },
+      storeSettings: { findUnique: vi.fn() },
+      $queryRawUnsafe: vi.fn(),
       $transaction: vi.fn(),
     },
   };
@@ -62,6 +66,10 @@ describe('admin products (/api/admin/products)', () => {
     mocks.prisma.category.findUnique.mockResolvedValue({ id: 'ceramics', isActive: true });
     mocks.prisma.productVariant.findMany.mockResolvedValue([]);
     mocks.prisma.media.findMany.mockResolvedValue([{ id: 'm_1' }]);
+    mocks.prisma.storeSettings.findUnique.mockResolvedValue({ lowStockThreshold: 5 });
+    mocks.prisma.$queryRawUnsafe.mockImplementation(async (sql: string) =>
+      String(sql).includes('COUNT(*)') ? [{ total: 1 }] : [{ id: 'p-test-mug' }],
+    );
   });
 
   describe('authorization', () => {
@@ -111,30 +119,39 @@ describe('admin products (/api/admin/products)', () => {
   });
 
   describe('GET /', () => {
-    it('lists products newest-updated first, applying the status / search / item-group filters', async () => {
+    it('lists products with server-side pagination, filters and sort (H16)', async () => {
       mocks.prisma.product.findMany.mockResolvedValue([productRow()]);
 
-      const res = await request(app).get('/api/admin/products?q=%20Mug%20&status=active&itemGroup=pots').set('Cookie', session.cookie);
+      const res = await request(app).get('/api/admin/products?q=%20Mug%20&status=active&itemGroup=pots&sort=name&dir=asc&page=2&pageSize=5').set('Cookie', session.cookie);
 
       expect(res.status).toBe(200);
       expect(res.body.total).toBe(1);
       expect(res.body.items).toHaveLength(1);
-      expect(mocks.prisma.product.findMany).toHaveBeenCalledWith({
-        where: { status: 'active', searchText: { contains: 'mug' }, itemGroup: { slug: 'pots' } },
-        include: PRODUCT_INCLUDE,
-        orderBy: { updatedAt: 'desc' },
-        take: 500,
-      });
+      expect(res.body.page).toBe(1); // clamped: only 1 page of results
+      expect(res.body.pageSize).toBe(5);
+      expect(res.body.pageCount).toBe(1);
+      // Filters/sort run in the database (raw SQL ids query), not in JS over a 500 cap.
+      const idSql = String(mocks.prisma.$queryRawUnsafe.mock.calls[1][0]);
+      expect(idSql).toContain("status = ?");
+      expect(idSql).toContain('searchText LIKE ?');
+      expect(idSql).toContain('itemGroupId = ?');
+      expect(idSql).toContain('ORDER BY nameEn ASC');
+      expect(idSql).toContain('LIMIT ? OFFSET ?');
+      expect(mocks.prisma.$queryRawUnsafe.mock.calls[1].slice(1)).toEqual(['active', '%mug%', 'pots', 5, 0]);
+      expect(mocks.prisma.product.findMany).toHaveBeenCalledWith({ where: { id: { in: ['p-test-mug'] } }, include: PRODUCT_INCLUDE });
     });
 
     it('ignores an unknown status filter and an empty query', async () => {
+      mocks.prisma.$queryRawUnsafe.mockImplementation(async (sql: string) =>
+        String(sql).includes('COUNT(*)') ? [{ total: 0 }] : [],
+      );
       mocks.prisma.product.findMany.mockResolvedValue([]);
 
       const res = await request(app).get('/api/admin/products?status=bogus').set('Cookie', session.cookie);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [], total: 0 });
-      expect(mocks.prisma.product.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+      expect(res.body).toEqual({ items: [], total: 0, page: 1, pageSize: 20, pageCount: 1 });
+      expect(mocks.prisma.product.findMany).not.toHaveBeenCalled();
     });
 
     it('returns the admin product shape', async () => {
@@ -422,11 +439,12 @@ describe('admin products (/api/admin/products)', () => {
   });
 
   describe('DELETE /all', () => {
-    it('removes every product and its children in one transaction, children first', async () => {
+    it('removes every product and its children in one transaction, children first, and logs it (H7)', async () => {
+      mocks.tx.product.deleteMany.mockResolvedValue({ count: 2 });
       const res = await write(request(app).delete('/api/admin/products/all'));
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true });
+      expect(res.body).toEqual({ ok: true, deleted: 2 });
       expect(mocks.prisma.$transaction).toHaveBeenCalledTimes(1);
       const order = [
         mocks.tx.productImage.deleteMany,
@@ -437,10 +455,13 @@ describe('admin products (/api/admin/products)', () => {
         mocks.tx.product.deleteMany,
       ].map((fn) => {
         expect(fn).toHaveBeenCalledTimes(1);
-        expect(fn).toHaveBeenCalledWith();
         return fn.mock.invocationCallOrder[0];
       });
       expect(order).toEqual([...order].sort((a, b) => a - b));
+      // The deletion is recorded in the audit log, in the same transaction.
+      expect(mocks.tx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+      expect(String(mocks.tx.$executeRawUnsafe.mock.calls[0][0])).toContain('INSERT INTO admin_audit_log');
+      expect(mocks.tx.$executeRawUnsafe.mock.calls[0]).toContain('products.delete_all');
     });
   });
 });

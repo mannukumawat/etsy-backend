@@ -1,27 +1,18 @@
-import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
-import { env } from '../../shared/config/env.js';
-import { handleTopupWebhook } from './wallet-topup.service.js';
+import { verifyRazorpayWebhookSignature } from '../../shared/utils/webhook.js';
+import { errorMessage, logger } from '../../shared/observability/logger.js';
+import { handleTopupWebhook, markTopupFailed } from './wallet-topup.service.js';
 
 // Mount path: POST /api/webhooks/wallet/razorpay
 // IMPORTANT: This route must be mounted BEFORE requireCsrf in app.ts.
 // It uses express.raw({ type: 'application/json' }) for body parsing to verify the HMAC signature.
-
-/** Verifies a Razorpay webhook signature for wallet events. */
-function verifyWebhookSignature(rawBody: Buffer, signature: string): boolean {
-  if (!env.RAZORPAY_WEBHOOK_SECRET) return false;
-  const expected = crypto
-    .createHmac('sha256', env.RAZORPAY_WEBHOOK_SECRET)
-    .update(rawBody)
-    .digest('hex');
-  return expected === signature;
-}
+// A DB error returns 500 so Razorpay retries the delivery instead of dropping it.
 
 export async function handleWalletRazorpayWebhook(req: Request, res: Response): Promise<void> {
   const signature = String(req.headers['x-razorpay-signature'] ?? '');
   const rawBody = req.body as Buffer;
 
-  if (!verifyWebhookSignature(rawBody, signature)) {
+  if (!verifyRazorpayWebhookSignature(rawBody, signature)) {
     res.status(400).json({ error: { message: 'Invalid webhook signature.' } });
     return;
   }
@@ -34,8 +25,9 @@ export async function handleWalletRazorpayWebhook(req: Request, res: Response): 
     return;
   }
 
-  // Only handle payment.captured events
-  if (event.event !== 'payment.captured') {
+  // payment.captured credits the top-up (amount-verified in the service); payment.failed
+  // marks the matching top-up failed so it can never be credited by a later verify call.
+  if (event.event !== 'payment.captured' && event.event !== 'payment.failed') {
     res.json({ status: 'ignored' });
     return;
   }
@@ -50,10 +42,15 @@ export async function handleWalletRazorpayWebhook(req: Request, res: Response): 
   }
 
   try {
+    if (event.event === 'payment.failed') {
+      const result = await markTopupFailed(orderId, paymentId);
+      res.json(result);
+      return;
+    }
     const result = await handleTopupWebhook(orderId, paymentId);
     res.json(result);
   } catch (err) {
-    console.error('[wallet webhook] Error processing topup webhook:', err);
+    logger.error('wallet webhook failed', { requestId: req.requestId ?? null, error: errorMessage(err) });
     res.status(500).json({ error: { message: 'Internal error processing webhook.' } });
   }
 }

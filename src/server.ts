@@ -10,7 +10,7 @@ async function main() {
   try {
     await assertDatabaseReachable();
   } catch (e) {
-    console.error('\nCannot reach PostgreSQL. Check DATABASE_URL in backend/.env and that the server is running.');
+    console.error('\nCannot reach MySQL. Check DATABASE_URL in backend/.env and that the server is running.');
     console.error(e instanceof Error ? e.message : e);
     process.exit(1);
   }

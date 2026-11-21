@@ -2,8 +2,10 @@ import { prisma } from '../../shared/database/prisma.js';
 import type { LineExtras } from './order.mapper.js';
 
 /**
- * `cancelled_qty` / `returned_qty` live on order_lines but outside the Prisma model (added by modules/returns/migrate-returns.ts),
- * so they are read with a small raw query and attached to the storefront order lines.
+ * `cancelled_qty` / `returned_qty` live on order_lines as real Prisma model fields
+ * (OrderLine.cancelledQty / returnedQty, migration 20261121010000), but the
+ * storefront mapper reads them with a small raw query and attaches them to the
+ * storefront order lines.
  */
 export async function loadLineExtras(orderIds: string[]): Promise<LineExtras> {
   const extras: LineExtras = new Map();

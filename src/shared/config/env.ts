@@ -8,6 +8,9 @@ const schema = z.object({
   DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(60).default(20),
   PORT: z.coerce.number().int().positive().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Structured JSON log level (M19): debug | info | warn | error. Read by
+  // src/shared/observability/logger.ts; invalid values fall back to info there.
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:5174'),
   // Express `trust proxy` setting (see https://expressjs.com/en/guide/behind-proxies.html). Controls
   // which `X-Forwarded-For` hops are trusted to determine the real client IP — used by the rate
@@ -20,9 +23,13 @@ const schema = z.object({
   TRUST_PROXY: z.string().default('false'),
   PUBLIC_API_URL: z.string().url().default('http://localhost:4000'),
   STOREFRONT_PUBLIC_URL: z.string().url().default('http://localhost:5173'),
+  // Admin app base URL — the password-reset email links here (the admin runs on 5174 in dev).
+  ADMIN_APP_URL: z.string().url().default('http://localhost:5174'),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters.'),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(12),
   OWNER_EMAIL: z.string().email().default('owner@yourstore.example'),
+  // No default is safe in production (see the refine below): an unset OWNER_PASSWORD
+  // fails startup outside dev/test instead of seeding a publicly-known password.
   OWNER_PASSWORD: z.string().min(8).default('AdminDemo2026'),
   OWNER_NAME: z.string().default('Store Owner'),
 
@@ -33,9 +40,10 @@ const schema = z.object({
   CRON_SECRET: z.string().min(16).optional(),
 
   // --- Customer sessions -------------------------------------------------------------------------
-  // Reuses JWT_SECRET to sign tokens (a separate cookie name keeps the two sessions independent);
-  // no extra configuration is required to run the customer-auth flow.
-  CUSTOMER_SESSION_TTL_HOURS: z.coerce.number().positive().default(24 * 30),
+  // Signed with the same JWT_SECRET as owner sessions, but distinguished by per-realm
+  // `iss`/`aud` claims (see src/shared/auth/revocation.ts) plus a separate cookie name,
+  // so a token minted for one realm can never be replayed in the other.
+  CUSTOMER_SESSION_TTL_HOURS: z.coerce.number().positive().default(24 * 7),
 
   // --- Email (password reset) ---------------------------------------------------------------------
   // All optional. Without them, reset emails are not sent: the reset link is logged to the server
@@ -55,13 +63,21 @@ const schema = z.object({
   // --- Payments ------------------------------------------------------------------------------------
   // Every payment method requires a real gateway; without one configured, checkout rejects those
   // methods with the exact env vars needed to enable them, rather than ever faking a "paid" result.
-  // There is no cash on delivery: all orders are prepaid.
-  PAYMENT_GATEWAY: z.enum(['none', 'razorpay', 'stripe']).default('none'),
+  // There is no cash on delivery: all orders are prepaid. Razorpay is the only supported gateway —
+  // Stripe was config-only (no SDK, client, or webhook code) and has been removed from the enum.
+  PAYMENT_GATEWAY: z.enum(['none', 'razorpay']).default('none'),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   // Separate secret configured in Razorpay Dashboard → Webhooks → Secret. NOT the API key secret.
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
-  STRIPE_SECRET_KEY: z.string().optional(),
+
+  // --- Bank-account encryption --------------------------------------------------------------------
+  // Optional. BANK_ACCOUNT_KEY must be 64 hex chars (32 bytes) when set; otherwise the key is
+  // derived from APP_SECRET, else from JWT_SECRET (which is always set — see the schema above).
+  // There is deliberately no hardcoded fallback: without a real secret the process cannot start
+  // with bank data encrypted under a publicly-known key.
+  BANK_ACCOUNT_KEY: z.string().optional(),
+  APP_SECRET: z.string().optional(),
 
   // --- Firebase Admin (push notifications) -------------------------------------------------------
   // All three are required to send push. Without them, push is skipped and the inbox still works.
@@ -75,6 +91,17 @@ const schema = z.object({
   WALLET_TOPUP_ENABLED: z.string().default('false'),
   WALLET_TOPUP_MIN_PAISE: z.coerce.number().int().positive().default(10000),   // ₹100
   WALLET_TOPUP_MAX_PAISE: z.coerce.number().int().positive().default(1000000), // ₹10000
+}).superRefine((data, ctx) => {
+  // H10: in production the owner password must be explicitly set — the dev default must never
+  // become a production back door. (The default still applies in dev/test so local setups keep
+  // working; the seed uses the same default there.)
+  if (data.NODE_ENV === 'production' && !process.env.OWNER_PASSWORD) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['OWNER_PASSWORD'],
+      message: 'OWNER_PASSWORD must be set explicitly in production (no default password is allowed).',
+    });
+  }
 });
 
 const parsed = schema.safeParse(process.env);
@@ -83,6 +110,13 @@ if (!parsed.success) {
   const details = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
   console.error(`\nInvalid backend environment:\n${details}\n\nCopy .env.example to .env and fill it in.\n`);
   process.exit(1);
+}
+
+// H11: bank-account data is encrypted under the JWT secret when neither a dedicated key nor an
+// app secret is configured. That is safe (JWT_SECRET is required and secret) but worth knowing:
+// set BANK_ACCOUNT_KEY or APP_SECRET to give bank data its own key.
+if (!parsed.data.BANK_ACCOUNT_KEY && !parsed.data.APP_SECRET) {
+  console.warn('[env] WARNING: BANK_ACCOUNT_KEY and APP_SECRET are both unset — bank-account data is encrypted under JWT_SECRET. Set BANK_ACCOUNT_KEY (64 hex chars) or APP_SECRET in backend/.env to use a dedicated key.');
 }
 
 /** `false` (no proxy, default), `true`/a bare number (trust that many hops), or anything else passed
@@ -118,12 +152,8 @@ export const isFirebaseConfigured = Boolean(
 export const isWalletTopupEnabled = env.WALLET_TOPUP_ENABLED === 'true';
 
 export const isPaymentGatewayConfigured =
-  env.PAYMENT_GATEWAY === 'razorpay'
-    ? Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET)
-    : env.PAYMENT_GATEWAY === 'stripe'
-      ? Boolean(env.STRIPE_SECRET_KEY)
-      : false;
+  env.PAYMENT_GATEWAY === 'razorpay' ? Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) : false;
 
 /** Exact env vars an operator needs to set to enable a real (online, prepaid) payment method. */
 export const paymentGatewaySetupHelp =
-  'Set PAYMENT_GATEWAY=razorpay with RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET, or PAYMENT_GATEWAY=stripe with STRIPE_SECRET_KEY, in backend/.env.';
+  'Set PAYMENT_GATEWAY=razorpay with RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env.';

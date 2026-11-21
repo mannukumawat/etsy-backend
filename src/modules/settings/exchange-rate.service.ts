@@ -49,6 +49,26 @@ export interface RateSyncResult {
   skipped: string[];
 }
 
+/**
+ * Maximum age of exchange rates checkout may rely on (M12). Live sync runs every
+ * 6 hours on a long-running server and daily via Vercel Cron, so 24 hours covers
+ * a missed run with slack; anything older means sync has been failing for a day.
+ * The checkout agent enforces this (checkout.service.ts must refuse or warn when
+ * `isRateStale(ratesUpdatedAt)` — see the snippet in the backend-fix report);
+ * this module only records the timestamp and owns the rule.
+ */
+export const MAX_RATE_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Pure stale-rate check: true when rates have never been synced or the last
+ * successful sync is older than `maxAgeMs` (defaults to MAX_RATE_AGE_MS).
+ * `ratesUpdatedAt` is the `CurrencySettings.ratesUpdatedAt` timestamp.
+ */
+export function isRateStale(ratesUpdatedAt: Date | null | undefined, maxAgeMs: number = MAX_RATE_AGE_MS): boolean {
+  if (!ratesUpdatedAt) return true;
+  return Date.now() - ratesUpdatedAt.getTime() > maxAgeMs;
+}
+
 /** Refreshes every non-USD currency that has `autoRate` on. Throws (after recording the error) if no feed answers. */
 export async function syncLiveRates(): Promise<RateSyncResult> {
   const configs = await prisma.currencyConfig.findMany({ where: { settingsId: 'singleton', autoRate: true, code: { not: 'USD' } } });
@@ -71,9 +91,12 @@ export async function syncLiveRates(): Promise<RateSyncResult> {
       await prisma.currencyConfig.update({ where: { id: c.id }, data: { rate: rounded } });
       updated.push({ code: c.code, from: c.rate, to: rounded });
     }
+    // ratesUpdatedAt records every successful sync — not only syncs that changed a
+    // value — so the stale-rate guard (isRateStale, M12) measures time since rates
+    // were last confirmed current, not time since a value happened to move.
     await prisma.currencySettings.update({
       where: { id: 'singleton' },
-      data: { autoSyncAt: new Date(), autoSyncError: skipped.length ? `No live rate for ${skipped.join(', ')}; kept the previous value.` : '', ...(updated.length ? { ratesUpdatedAt: new Date() } : {}) },
+      data: { autoSyncAt: new Date(), ratesUpdatedAt: new Date(), autoSyncError: skipped.length ? `No live rate for ${skipped.join(', ')}; kept the previous value.` : '' },
     });
     return { source, updated, skipped };
   } catch (e) {

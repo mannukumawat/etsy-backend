@@ -6,9 +6,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   process.env.DATABASE_URL ??= 'mysql://test:test@localhost:3306/test';
   process.env.JWT_SECRET ??= 'test-only-jwt-secret-0123456789';
-  return { prisma: { owner: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn(), create: vi.fn() } } };
+  return { prisma: { owner: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn(), create: vi.fn() }, revokedSession: { findUnique: vi.fn(async () => null), upsert: vi.fn(async () => ({})), deleteMany: vi.fn(async () => ({ count: 0 })) } } };
 });
 vi.mock('../../../shared/database/prisma.js', () => ({ prisma: mocks.prisma, assertDatabaseReachable: vi.fn() }));
+// The generated Prisma client is absent in this environment (prisma generate is
+// network-blocked); stub the two runtime value imports so createApp() can load.
+vi.mock('@prisma/client', () => ({
+  PrismaClient: class {},
+  Prisma: { PrismaClientKnownRequestError: class extends Error { code?: string } },
+}));
 
 import { createApp } from '../../../app.js';
 import { CSRF_FORBIDDEN_BODY, OWNER, OWNER_PASSWORD, UNAUTHORIZED_BODY, findOwner, loginAsOwner, sessionFrom, setCookieLines, type Session } from '../../../__tests__/support/owner-session.js';

@@ -9,6 +9,7 @@
 import 'dotenv/config';
 import { createRequire } from 'node:module';
 import { PrismaClient } from '@prisma/client';
+import { slugify } from '../src/shared/utils/slugify.js';
 
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
@@ -19,10 +20,6 @@ const XLSX_PATH = 'C:\\Users\\mannu\\Downloads\\DIGNITYARTEDGE_products_formatte
 
 const INR_TO_USD = 84;
 const toCents = (inr: number) => Math.round((inr / INR_TO_USD) * 100);
-
-function slugify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
-}
 
 let _seq = 0;
 const uid = () => `${Date.now().toString(36)}${(++_seq).toString(36).padStart(4, '0')}`;

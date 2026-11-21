@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { env, isSmtpConfigured } from '../config/env.js';
+import { logger } from '../observability/logger.js';
 
 // Email is optional infrastructure: every flow that would send mail (today, just password reset)
 // still completes and returns a real result without SMTP configured. What changes is delivery —
@@ -30,10 +31,11 @@ export interface SendMailResult {
 export async function sendMail(to: string, subject: string, text: string): Promise<SendMailResult> {
   const client = getTransporter();
   if (!client) {
-    console.warn(`[mailer] SMTP not configured — not sending "${subject}" to ${to}.`);
-    console.warn('[mailer] Set SMTP_HOST, SMTP_USER and SMTP_PASSWORD in backend/.env to enable real delivery.');
+    // LOUD on purpose: with no SMTP, password-reset emails are silently never delivered while
+    // the API still answers { ok: true }. An operator reading the logs must not miss this.
+    logger.warn('smtp not configured, email not delivered', { to, subject });
     if (env.isProd) return { delivered: false };
-    console.warn(`[mailer] Dev preview:\n${text}`);
+    logger.warn('smtp not configured, dev preview of undelivered email', { to, subject, text });
     return { delivered: false, devPreview: { to, subject, text } };
   }
   await client.sendMail({ from: env.SMTP_FROM, to, subject, text });

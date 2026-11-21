@@ -3,8 +3,51 @@ import { badRequest, conflict, notFound } from '../../shared/errors/http-error.j
 import { stringifyJson } from '../../shared/utils/json.js';
 import type { CouponInput } from './coupon.schema.js';
 
-export function listCoupons() {
-  return prisma.coupon.findMany({ orderBy: { code: 'asc' } });
+/** M-O14: server-side search/state filter + pagination — the admin used to fetch the
+ *  whole list and filter client-side. `state` mirrors couponState() exactly:
+ *  inactive → isActive false; exhausted → usageLimit reached; scheduled → starts in
+ *  the future; expired → ended in the past; active → everything else live. */
+export interface CouponListQuery {
+  q: string;
+  state: string;
+  page: number;
+  pageSize: number;
+}
+
+export async function listCoupons(query: CouponListQuery) {
+  const now = new Date();
+  // The lifecycle state is a computed value (couponState(): active/scheduled/
+  // expired/inactive/exhausted from isActive + dates + usage) that Prisma cannot
+  // express as a single WHERE — null start/end dates must count as "no bound", and
+  // "exhausted" is a column-to-column comparison. So the DB filters what it can
+  // (search + isActive) and the state is applied in JS on that small set.
+  const where = {
+    ...(query.q ? { OR: [{ code: { contains: query.q } }, { description: { contains: query.q } }] } : {}),
+    ...(query.state === 'inactive' ? { isActive: false } : query.state ? { isActive: true } : {}),
+  };
+  const all = await prisma.coupon.findMany({ where, orderBy: { code: 'asc' } });
+  const stateOf = (c: { isActive: boolean; usageLimit: number | null; timesUsed: number; startsAt: Date | null; endsAt: Date | null }) =>
+    !c.isActive ? 'inactive'
+    : c.usageLimit != null && c.timesUsed >= c.usageLimit ? 'exhausted'
+    : c.startsAt && c.startsAt > now ? 'scheduled'
+    : c.endsAt && c.endsAt < now ? 'expired'
+    : 'active';
+  const rows = query.state ? all.filter((c) => stateOf(c) === query.state) : all;
+  const total = rows.length;
+  const pageSize = Math.min(100, Math.max(1, query.pageSize));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, query.page), pageCount);
+  // M-O14: per-state counts for the filter labels, over the same search but ignoring
+  // the state filter (coupon table is small; one extra lightweight select).
+  const counted = query.state
+    ? await prisma.coupon.findMany({
+        where: query.q ? { OR: [{ code: { contains: query.q } }, { description: { contains: query.q } }] } : {},
+        select: { isActive: true, usageLimit: true, timesUsed: true, startsAt: true, endsAt: true },
+      })
+    : all;
+  const stateCounts: Record<string, number> = {};
+  for (const c of counted) stateCounts[stateOf(c)] = (stateCounts[stateOf(c)] ?? 0) + 1;
+  return { items: rows.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, pageCount, stateCounts };
 }
 
 export async function getCouponOr404(id: string) {

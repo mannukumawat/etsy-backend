@@ -12,7 +12,6 @@ import {
   markOwnerNotificationRead,
   sendAdminNotification,
 } from './notification.service.js';
-import { flushPendingPush, validateCronSecret } from './push.worker.js';
 
 export const adminNotificationsRouter = Router();
 
@@ -79,17 +78,9 @@ adminNotificationsRouter.get(
   }),
 );
 
-// --- Vercel Cron endpoint ---
-// Called by Vercel Cron scheduler (Authorization: Bearer $CRON_SECRET).
-// Also works fine in a VPS deploy (just not called — push worker runs on interval instead).
-adminNotificationsRouter.post(
-  '/push-flush',
-  route(async (req, res) => {
-    if (!validateCronSecret(req.header('authorization'))) {
-      res.status(404).json({ error: { code: 'not_found', message: 'Not found.' } });
-      return;
-    }
-    const result = await flushPendingPush();
-    res.json(result);
-  }),
-);
+// --- Push flush ---
+// There is NO owner POST /push-flush endpoint any more: it sat behind the global
+// requireOwner gate, so a Vercel Cron call with no owner cookie always got 401 and the
+// endpoint was never called by anything. The single flush path is the cron GET
+// /api/notifications/cron/push-flush (CRON_SECRET-guarded, hourly) — see
+// cron-notification.routes.ts. Owner manual flush is gone with this endpoint.

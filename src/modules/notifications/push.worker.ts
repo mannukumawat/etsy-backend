@@ -5,16 +5,21 @@
  * looks up the recipient's FCM tokens, sends the notification, and marks the record.
  *
  * On VPS: `startPushWorker()` → setInterval every 30s.
- * On Vercel: expose POST /api/admin/notifications/push-flush with CRON_SECRET guard.
+ * On Vercel: the cron GET /api/notifications/cron/push-flush (vercel.json, hourly) is the
+ * single flush path — it calls flushPendingPush() directly. There is no owner POST flush
+ * endpoint any more (it was behind the owner gate, so Vercel Cron could never call it).
  */
+import { timingSafeEqual } from 'node:crypto';
 import { prisma } from '../../shared/database/prisma.js';
 import { env } from '../../shared/config/env.js';
 import { sendToTokens } from './fcm.service.js';
 
 const BUFFER_MS = 5_000; // 5 s buffer so a customer reading immediately doesn't get a push
 const BATCH_SIZE = 50;
+const MAX_PASSES = 10; // loop-until-empty cap: 10 passes × 50 records drains any realistic backlog
 
-export async function flushPendingPush(): Promise<{ processed: number }> {
+/** One pass: process at most BATCH_SIZE pending records. Returns how many were processed. */
+async function flushPendingPushBatch(): Promise<{ processed: number }> {
   const cutoff = new Date(Date.now() - BUFFER_MS);
 
   const pending = await prisma.notificationRecord.findMany({
@@ -67,6 +72,22 @@ export async function flushPendingPush(): Promise<{ processed: number }> {
   return { processed };
 }
 
+/**
+ * Drain the pending-push queue: repeat single passes until one processes 0 records, with
+ * a cap of MAX_PASSES so a pathological backlog cannot run unbounded in one invocation.
+ * Both the VPS interval worker and the Vercel cron GET call this — one invocation clears
+ * the backlog instead of leaving everything past the first 50 for the next day/hour.
+ */
+export async function flushPendingPush(): Promise<{ processed: number }> {
+  let total = 0;
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const { processed } = await flushPendingPushBatch();
+    total += processed;
+    if (processed === 0) break;
+  }
+  return { processed: total };
+}
+
 /** Start the 30-second push worker timer (VPS / long-running process). */
 export function startPushWorker(): void {
   setInterval(() => {
@@ -77,8 +98,11 @@ export function startPushWorker(): void {
   console.log('[push-worker] started (30s interval)');
 }
 
-/** Validate CRON_SECRET for Vercel Cron requests. Returns true if valid. */
+/** Validate CRON_SECRET for Vercel Cron requests. Returns true if valid. Compared in
+ *  constant time (same pattern as the settings cron in settings.service.ts). */
 export function validateCronSecret(authHeader: string | undefined): boolean {
   if (!env.CRON_SECRET) return false;
-  return authHeader === `Bearer ${env.CRON_SECRET}`;
+  const given = Buffer.from(authHeader ?? '');
+  const expected = Buffer.from(`Bearer ${env.CRON_SECRET}`);
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }

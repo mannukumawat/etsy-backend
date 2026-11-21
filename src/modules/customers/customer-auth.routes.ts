@@ -53,8 +53,8 @@ customerAuthRouter.post(
   }),
 );
 
-customerAuthRouter.post('/logout', (_req, res) => {
-  clearCustomerSession(res);
+customerAuthRouter.post('/logout', (req, res) => {
+  clearCustomerSession(res, req.cookies?.ys_customer_session);
   res.json({ ok: true });
 });
 
@@ -86,7 +86,7 @@ customerAuthRouter.post(
   passwordResetConfirmLimiter,
   route(async (req, res) => {
     const { token, password } = passwordResetConfirmSchema.parse(req.body);
-    await confirmPasswordReset(token, password);
+    await confirmPasswordReset(token, password, req.cookies?.ys_customer_session);
     res.json({ ok: true });
   }),
 );

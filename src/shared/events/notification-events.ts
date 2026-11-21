@@ -7,6 +7,8 @@
  * Firebase unavailability must NEVER fail the emitting transaction.
  */
 
+import { errorMessage, logger } from '../observability/logger.js';
+
 export type NotificationEventType =
   | 'order.placed'
   | 'order.shipped'
@@ -20,7 +22,8 @@ export type NotificationEventType =
   | 'refund.failed'
   | 'wallet.topped_up'
   | 'wallet.refunded'
-  | 'wallet.spend';
+  | 'wallet.spend'
+  | 'inventory.low_stock';
 
 export type NotificationEvent =
   | { type: 'order.placed'; orderId: string; orderNumber: string; customerId: string | null; customerEmail: string; totalPaise: number; currency: string }
@@ -35,7 +38,8 @@ export type NotificationEvent =
   | { type: 'refund.failed'; refundId: string; orderId: string; customerId: string; amountPaise: number; method: string }
   | { type: 'wallet.topped_up'; customerId: string; amountPaise: number; walletTxId: string; newBalancePaise: number }
   | { type: 'wallet.refunded'; customerId: string; amountPaise: number; walletTxId: string; returnId?: string; newBalancePaise: number }
-  | { type: 'wallet.spend'; customerId: string; amountPaise: number; walletTxId: string; orderId: string };
+  | { type: 'wallet.spend'; customerId: string; amountPaise: number; walletTxId: string; orderId: string }
+  | { type: 'inventory.low_stock'; variantId: string; sku: string; productName: string; stock: number; threshold: number };
 
 /** Handler registered by the notifications module. Replaced at startup; no-op until set. */
 let _handler: ((event: NotificationEvent) => Promise<void>) | null = null;
@@ -55,6 +59,6 @@ export async function emitNotificationEvent(event: NotificationEvent): Promise<v
   try {
     await _handler(event);
   } catch (err) {
-    console.error('[notifications] handler error for event', event.type, err);
+    logger.error('notification handler failed', { eventType: event.type, error: errorMessage(err) });
   }
 }

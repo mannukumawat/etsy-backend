@@ -1,12 +1,22 @@
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { env } from '../../shared/config/env.js';
+
+// Bank-account encryption key, resolved from the validated env schema (see
+// src/shared/config/env.ts) — never from a hardcoded fallback. Precedence:
+// BANK_ACCOUNT_KEY (64 hex chars) → derive from APP_SECRET → derive from JWT_SECRET.
+// JWT_SECRET is required by the schema, so there is always a real secret; when neither
+// BANK_ACCOUNT_KEY nor APP_SECRET is set, env.ts logs a loud startup warning that bank
+// data is encrypted under the JWT secret.
+if (env.BANK_ACCOUNT_KEY && !(env.BANK_ACCOUNT_KEY.length === 64 && /^[0-9a-fA-F]+$/.test(env.BANK_ACCOUNT_KEY))) {
+  console.warn('[bank-accounts] WARNING: BANK_ACCOUNT_KEY is set but is not 64 hex characters — it is ignored and the key is derived from APP_SECRET/JWT_SECRET instead. Set a 64-hex-char key in backend/.env.');
+}
 
 function getDerivedKey(): Buffer {
-  // 32-byte key: prefer BANK_ACCOUNT_KEY (64 hex chars), else derive from app secret.
-  const hexKey = process.env.BANK_ACCOUNT_KEY ?? '';
+  const hexKey = env.BANK_ACCOUNT_KEY ?? '';
   if (hexKey.length === 64 && /^[0-9a-fA-F]+$/.test(hexKey)) {
     return Buffer.from(hexKey, 'hex');
   }
-  const appSecret = process.env.APP_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret-change-me';
+  const appSecret = env.APP_SECRET ?? env.JWT_SECRET;
   return createHash('sha256').update(appSecret).digest();
 }
 

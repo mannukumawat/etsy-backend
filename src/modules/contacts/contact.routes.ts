@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { route } from '../../shared/http/async-route.js';
+import { contactLimiter } from '../../shared/middleware/rate-limit.middleware.js';
 import { contactBodySchema } from './contact.schema.js';
 import { submitContactMessage } from './contact.service.js';
 
@@ -7,6 +8,7 @@ export const contactRouter = Router();
 
 contactRouter.post(
   '/contact',
+  contactLimiter,
   route(async (req, res) => {
     const body = contactBodySchema.safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: { code: 'validation', issues: body.error.issues } });

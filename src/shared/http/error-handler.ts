@@ -2,11 +2,12 @@ import type { NextFunction, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import { HttpError, badRequest, conflict, notFound } from '../errors/http-error.js';
+import { errorMessage, logger } from '../observability/logger.js';
 
 function prismaIssue(e: { code?: string; meta?: unknown }): HttpError | null {
   if (e.code === 'P2002') {
-    // PostgreSQL/SQLite report the conflicting fields as an array; MySQL reports the constraint name as
-    // a single string (e.g. "orders_number_key").
+    // MySQL reports the conflicting constraint name as a single string
+    // (e.g. "orders_number_key"); the array form is handled only as a defensive fallback.
     const raw = (e.meta as { target?: string[] | string } | undefined)?.target ?? [];
     const target = Array.isArray(raw) ? raw.join(', ') : raw;
     // Only name fields the forms know; never echo a raw column/index name ("PRIMARY", "orders_number_key").
@@ -42,7 +43,17 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   const prismaCode = typeof err === 'object' && err !== null && 'code' in err && typeof (err as { code?: unknown }).code === 'string'
     ? (err as { code: string }).code
     : null;
-  console.error(`[${reference}] Unhandled ${req.method} ${req.path}:`, err);
+  // Structured log (M19): one JSON line with the request ID so the operator can
+  // correlate it with the request log. Only the short message is logged — never
+  // the full error object (stacks can contain paths and payloads).
+  logger.error('unhandled error', {
+    reference,
+    requestId: req.requestId ?? null,
+    method: req.method,
+    path: req.path,
+    error: errorMessage(err),
+    prismaCode,
+  });
   return res.status(500).json({
     error: {
       code: 'server_error',

@@ -31,11 +31,17 @@ export function toPublicExchange(r: ExchangeRequestRow, events: ExchangeEventRow
   };
 }
 
-export function toAdminExchange(r: ExchangeRequestRow, events: ExchangeEventRow[] = []) {
+export function toAdminExchange(r: ExchangeRequestRow, events: ExchangeEventRow[] = [], amountDue?: number) {
   const base = toPublicExchange(r, events);
+  // Amount still due from the customer, in the order currency's minor units: the
+  // positive price difference, unless its payment was recorded (a
+  // 'payment_recorded' event). The list endpoint passes the precomputed value;
+  // detail endpoints let it be derived from the timeline here.
+  const paymentRecorded = events.some((e) => e.type === 'payment_recorded');
   return {
     ...base,
     adminNote: r.admin_note,
     rejectionReason: r.rejection_reason,
+    amountDue: amountDue ?? (r.price_difference > 0 && !paymentRecorded ? r.price_difference : 0),
   };
 }

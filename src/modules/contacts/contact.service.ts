@@ -30,19 +30,30 @@ export async function submitContactMessage({ name, email, subject, orderNumber, 
   return { reference };
 }
 
-export async function listContactMessages({ status, page }: { status: string | null; page: number }) {
+export async function listContactMessages({ status, page, q }: { status: string | null; page: number; q: string }) {
   const offset = (page - 1) * PAGE_SIZE;
 
-  const whereClause = status ? `WHERE status = ?` : '';
-  const params: unknown[] = status ? [status, PAGE_SIZE, offset] : [PAGE_SIZE, offset];
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (status) {
+    conds.push('status = ?');
+    params.push(status);
+  }
+  if (q) {
+    // Escape LIKE wildcards so '%'/'_' in the search text match literally.
+    const like = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+    conds.push(`(name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR subject LIKE ? ESCAPE '\\' OR message LIKE ? ESCAPE '\\' OR orderNumber LIKE ? ESCAPE '\\')`);
+    params.push(like, like, like, like, like);
+  }
+  const whereClause = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const rows = await prisma.$queryRawUnsafe<RawContactMessage[]>(
     `SELECT * FROM contact_messages ${whereClause} ORDER BY createdAt DESC LIMIT ? OFFSET ?`,
-    ...params,
+    ...params, PAGE_SIZE, offset,
   );
   const [{ total }] = await prisma.$queryRawUnsafe<[{ total: bigint }]>(
     `SELECT COUNT(*) as total FROM contact_messages ${whereClause}`,
-    ...(status ? [status] : []),
+    ...params,
   );
 
   return { items: rows.map(toAdminContactMessage), total: Number(total), page, pages: Math.ceil(Number(total) / PAGE_SIZE) };

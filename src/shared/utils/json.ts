@@ -1,5 +1,5 @@
-// List-ish catalog fields (tags, variant option maps, variant image ids) are stored as JSON text so
-// the same schema runs on SQLite and PostgreSQL. These helpers are the only place that encoding lives.
+// List-ish catalog fields (tags, variant option maps, variant image ids) are stored as JSON text
+// (MySQL has no native string arrays). These helpers are the only place that encoding lives.
 
 export function parseStringArray(value: string | null | undefined): string[] {
   if (!value) return [];
@@ -23,13 +23,3 @@ export function parseStringMap(value: string | null | undefined): Record<string,
 }
 
 export const stringifyJson = (value: unknown): string => JSON.stringify(value ?? null);
-
-/** Lowercase haystack used for case-insensitive search on engines without ILIKE. */
-export function buildSearchText(parts: Array<string | null | undefined>): string {
-  return parts
-    .filter((p): p is string => !!p && p.trim().length > 0)
-    .join(' ')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}

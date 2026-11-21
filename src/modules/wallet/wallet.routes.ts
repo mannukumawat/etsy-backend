@@ -5,10 +5,14 @@
 import { Router } from 'express';
 import { route } from '../../shared/http/async-route.js';
 import { requireCustomer } from '../../shared/middleware/customer-auth.middleware.js';
+import { topupLimiter } from '../../shared/middleware/rate-limit.middleware.js';
 import { getBalance, listTransactions } from './wallet.service.js';
 import { initiateTopup, verifyTopup } from './wallet-topup.service.js';
 import { createTopupSchema, verifyTopupSchema, walletTxListSchema } from './wallet.schema.js';
 import { isWalletTopupEnabled } from '../../shared/config/env.js';
+
+// H12: the top-up money endpoints are rate-limited by `topupLimiter` from the shared
+// rate-limit middleware.
 
 export const walletRouter = Router();
 walletRouter.use(requireCustomer);
@@ -37,6 +41,7 @@ walletRouter.get(
 /** POST /api/customer/wallet/topup/create — initiate a Razorpay top-up */
 walletRouter.post(
   '/topup/create',
+  topupLimiter,
   route(async (req, res) => {
     const customerId = req.customer!.sub;
     const input = createTopupSchema.parse(req.body);
@@ -48,6 +53,7 @@ walletRouter.post(
 /** POST /api/customer/wallet/topup/verify — verify payment and credit wallet */
 walletRouter.post(
   '/topup/verify',
+  topupLimiter,
   route(async (req, res) => {
     const customerId = req.customer!.sub;
     const input = verifyTopupSchema.parse(req.body);

@@ -44,9 +44,32 @@ export type CancelOrderInput = z.infer<typeof cancelOrderSchema>;
 export const refundOrderSchema = z.object({
   amount: z.number().int('Use whole minor units.').positive('Refund must be above zero.'),
   reason: z.string().trim().min(1, 'Give a reason for the refund.').max(300),
+  /** 'original' refunds through Razorpay; manual methods record a pending refund to verify later. */
+  method: z.enum(['original', 'manual_bank', 'manual_upi', 'store_credit']).default('original'),
+  /** Bank/UPI reference — required for manual refunds. */
+  reference: z.string().trim().max(200).optional(),
+  note: z.string().trim().max(500).optional(),
 });
 export type RefundOrderInput = z.infer<typeof refundOrderSchema>;
 
 export const addNoteSchema = z.object({ body: z.string().trim().min(1, 'Note cannot be empty.').max(1000) });
 export type AddNoteInput = z.infer<typeof addNoteSchema>;
+
+/** M5: marking an order paid needs proof — a payment reference, or an explicit
+ *  manual-reconciliation override with a mandatory audit note. */
+export const markOrderPaidSchema = z
+  .object({
+    paymentReference: z.string().trim().max(255).optional(),
+    note: z.string().trim().max(500).optional(),
+    force: z.boolean().default(false),
+  })
+  .superRefine((input, ctx) => {
+    if (!input.paymentReference?.trim() && !input.force) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['paymentReference'], message: 'A payment reference is required, or use the manual reconciliation override with an audit note.' });
+    }
+    if (input.force && !input.note?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['note'], message: 'A manual reconciliation without a payment reference requires an audit note.' });
+    }
+  });
+export type MarkOrderPaidInput = z.infer<typeof markOrderPaidSchema>;
 

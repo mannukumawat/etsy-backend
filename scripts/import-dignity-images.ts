@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { PrismaClient } from '@prisma/client';
+import { slugify } from '../src/shared/utils/slugify.js';
 
 const prisma = new PrismaClient();
 const APPLY = process.argv.includes('--apply');
@@ -27,10 +28,6 @@ type SourceProduct = {
 };
 
 type SourceFile = { products?: SourceProduct[] };
-
-function slugify(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
-}
 
 function mediaId(listingId: string, position: number) {
   const safeListing = listingId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);

@@ -3,6 +3,7 @@ import multer from 'multer';
 import { badRequest } from '../../shared/errors/http-error.js';
 import { route } from '../../shared/http/async-route.js';
 import { requireOwner } from '../../shared/middleware/auth.middleware.js';
+import { parseProductListQuery } from '../products/product.routes.js';
 import { buildProductImportTemplate, exportProductsWorkbook } from './export.service.js';
 import { importProductsFromWorkbook } from './import.service.js';
 
@@ -27,12 +28,14 @@ importExportRouter.get(
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ---------------------------------------------------------------------------
-// GET /api/admin/products/export  — download current products as Excel
+// GET /api/admin/products/export  — download current products as Excel.
+// Honours the admin list's filters (same query params as GET /api/admin/products),
+// so an export of a filtered list contains exactly that list (H6).
 // ---------------------------------------------------------------------------
 importExportRouter.get(
   '/products/export',
-  route(async (_req, res) => {
-    const buf = await exportProductsWorkbook();
+  route(async (req, res) => {
+    const buf = await exportProductsWorkbook(parseProductListQuery(req.query as Record<string, unknown>));
     res.setHeader('Content-Disposition', 'attachment; filename="products-export.xlsx"');
     res.setHeader('Content-Type', XLSX_CONTENT_TYPE);
     res.send(buf);

@@ -19,6 +19,45 @@ export const PRODUCT_INCLUDE = {
 
 export type ProductRow = Prisma.ProductGetPayload<{ include: typeof PRODUCT_INCLUDE }>;
 
+/**
+ * List-only select for the storefront catalogue grid (M6): the grid needs the id,
+ * slug, names, prices, the primary images and the rating fields — it never needs
+ * the full options, specs or long descriptions, so they are not hydrated per row.
+ * The detail endpoint keeps PRODUCT_INCLUDE + toStorefrontProduct.
+ */
+export const PRODUCT_LIST_SELECT = {
+  id: true,
+  slug: true,
+  nameEn: true,
+  nameHi: true,
+  shortDescriptionEn: true,
+  shortDescriptionHi: true,
+  categoryId: true,
+  itemGroupId: true,
+  navLinkId: true,
+  basePrice: true,
+  baseSalePrice: true,
+  tags: true,
+  materialsEn: true,
+  materialsHi: true,
+  returnsAllowed: true,
+  exchangeAllowed: true,
+  returnDays: true,
+  isFeatured: true,
+  isBestseller: true,
+  isNew: true,
+  displayOrder: true,
+  createdAt: true,
+  category: { select: { slug: true } },
+  images: { orderBy: { position: 'asc' }, take: 2, select: { mediaId: true, altEn: true, altHi: true } },
+  variants: {
+    orderBy: { position: 'asc' },
+    select: { id: true, sku: true, options: true, price: true, salePrice: true, stock: true, imageIds: true },
+  },
+} satisfies Prisma.ProductSelect;
+
+export type ProductListRow = Prisma.ProductGetPayload<{ select: typeof PRODUCT_LIST_SELECT }>;
+
 /** Variant option maps and image id lists are stored as JSON text (see src/json.ts). */
 const variantOptions = parseStringMap;
 
@@ -37,6 +76,11 @@ export function toAdminProduct(p: ProductRow) {
     categoryId: p.categoryId,
     itemGroupId: p.itemGroupId ?? null,
     navLinkId: p.navLinkId ?? null,
+    collectionId: p.collectionId ?? null,
+    barcode: p.barcode ?? null,
+    // M-P1: cost price is admin-only. toStorefrontProduct deliberately omits it,
+    // so it can never leak to shoppers via any product endpoint.
+    costPrice: p.costPrice ?? null,
     tags: parseStringArray(p.tags),
     basePrice: p.basePrice,
     baseSalePrice: p.baseSalePrice,
@@ -151,6 +195,64 @@ export function toStorefrontListProduct(p: ProductRow, reviews: ReviewSummary = 
     variants: product.variants.map((variant) => ({ ...variant, images: variant.images.slice(0, 1) })),
     dimensions: [],
     reviews: [],
+  };
+}
+
+/**
+ * Same compact catalogue shape as toStorefrontListProduct, built from a
+ * PRODUCT_LIST_SELECT row instead of a fully hydrated one (M6). The only
+ * content difference: `options` is always `[]` — the grid never renders
+ * options, so they are not selected. Anything that needs options uses the
+ * detail endpoint (`GET /api/products/:slug`).
+ */
+export function toStorefrontListRow(p: ProductListRow, reviews: ReviewSummary = EMPTY_REVIEW_SUMMARY) {
+  const cheapest = p.variants.reduce<(typeof p.variants)[number] | null>(
+    (best: { price: number; salePrice: number | null } | null, v: { price: number; salePrice: number | null }) =>
+      (best === null || effective(v) < effective(best) ? v : best),
+    null,
+  );
+  const imageFor = (mediaId: string) => {
+    const img = p.images.find((i: { mediaId: string; altEn: string; altHi: string }) => i.mediaId === mediaId);
+    return { src: mediaUrl(mediaId), alt: Lopt(img?.altEn ?? p.nameEn, img?.altHi ?? '') };
+  };
+  return {
+    id: p.id,
+    slug: p.slug,
+    name: Lopt(p.nameEn, p.nameHi),
+    shortDescription: Lopt(p.shortDescriptionEn, p.shortDescriptionHi),
+    description: { en: '' },
+    categoryId: p.category.slug,
+    itemGroupId: p.itemGroupId ?? null,
+    navLinkId: p.navLinkId ?? null,
+    price: cheapest?.price ?? p.basePrice,
+    ...(cheapest?.salePrice != null ? { salePrice: cheapest.salePrice } : {}),
+    images: p.images.map((i: { mediaId: string; altEn: string; altHi: string }) => ({ src: mediaUrl(i.mediaId), alt: Lopt(i.altEn, i.altHi) })),
+    options: [] as Array<{ id: string; name: ReturnType<typeof Lopt>; type: 'swatch' | 'button'; values: Array<{ id: string; label: ReturnType<typeof Lopt>; swatch?: string }> }>,
+    variants: p.variants.map((v: { id: string; sku: string; options: string; price: number; salePrice: number | null; stock: number; imageIds: string }) => ({
+      id: v.id,
+      sku: v.sku,
+      options: variantOptions(v.options),
+      price: v.price,
+      ...(v.salePrice != null ? { salePrice: v.salePrice } : {}),
+      stock: v.stock,
+      images: parseStringArray(v.imageIds).slice(0, 1).map(imageFor),
+    })),
+    materials: Lopt(p.materialsEn, p.materialsHi),
+    care: { en: '' },
+    returnsAllowed: p.returnsAllowed,
+    exchangeAllowed: p.exchangeAllowed,
+    returnDays: p.returnDays,
+    dimensions: [] as Array<{ key: string; value: string }>,
+    reviews: [] as ReviewSummary['recent'],
+    rating: reviews.rating,
+    reviewCount: reviews.reviewCount,
+    reviewDistribution: reviews.distribution,
+    tags: parseStringArray(p.tags),
+    isFeatured: p.isFeatured,
+    isBestseller: p.isBestseller,
+    isNew: p.isNew,
+    createdAt: p.createdAt.toISOString(),
+    featuredRank: p.displayOrder,
   };
 }
 

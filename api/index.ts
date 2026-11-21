@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { randomUUID } from 'node:crypto';
 
 let handler: ((req: IncomingMessage, res: ServerResponse) => void) | null = null;
 let loadError: unknown = null;
@@ -12,10 +13,13 @@ try {
 
 export default function (req: IncomingMessage, res: ServerResponse) {
   if (loadError || !handler) {
-    const msg = loadError instanceof Error ? loadError.message : String(loadError);
-    const stack = loadError instanceof Error ? loadError.stack : '';
+    // Never leak the load failure's message or stack to the client (H9): the full error
+    // goes to the server log with the same 8-char reference the error handler uses, so
+    // an operator can find it without the client ever seeing internals.
+    const reference = randomUUID().slice(0, 8);
+    console.error(`[${reference}] App failed to load:`, loadError);
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'App failed to load', message: msg, stack }));
+    res.end(JSON.stringify({ error: 'App failed to load', reference }));
     return;
   }
   handler(req, res);
