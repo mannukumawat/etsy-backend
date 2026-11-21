@@ -207,8 +207,7 @@ export function toStorefrontListProduct(p: ProductRow, reviews: ReviewSummary = 
  */
 export function toStorefrontListRow(p: ProductListRow, reviews: ReviewSummary = EMPTY_REVIEW_SUMMARY) {
   const cheapest = p.variants.reduce<(typeof p.variants)[number] | null>(
-    (best: { price: number; salePrice: number | null } | null, v: { price: number; salePrice: number | null }) =>
-      (best === null || effective(v) < effective(best) ? v : best),
+    (best, v) => (best === null || effective(v) < effective(best) ? v : best),
     null,
   );
   const imageFor = (mediaId: string) => {

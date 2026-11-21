@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict, notFound } from '../../shared/errors/http-error.js';
 import { parseStringMap } from '../../shared/utils/json.js';
@@ -79,10 +80,10 @@ export async function listInventory(query: InventoryListQuery) {
   const pageSize = Math.min(100, Math.max(1, query.pageSize));
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(Math.max(1, query.page), pageCount);
-  const orderBy =
-    query.sort === 'sku' ? [{ sku: query.dir }] as const
-    : query.sort === 'stock' ? [{ stock: query.dir }, { sku: 'asc' }] as const
-    : [{ product: { nameEn: query.dir } }, { position: 'asc' }] as const;
+  const orderBy: Prisma.ProductVariantOrderByWithRelationInput[] =
+    query.sort === 'sku' ? [{ sku: query.dir }]
+    : query.sort === 'stock' ? [{ stock: query.dir }, { sku: 'asc' }]
+    : [{ product: { nameEn: query.dir } }, { position: 'asc' }];
   const variants = await prisma.productVariant.findMany({
     where,
     include: VARIANT_INCLUDE,

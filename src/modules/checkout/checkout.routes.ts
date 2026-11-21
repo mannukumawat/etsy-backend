@@ -89,7 +89,7 @@ checkoutRouter.post('/razorpay/create-order', checkoutLimiter, route(async (req,
   await prisma.razorpayOrder.create({
     data: {
       razorpayOrderId: order.id,
-      amount: order.amount,
+      amount: Number(order.amount),
       currency: order.currency,
       receipt,
       customerKey,

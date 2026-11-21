@@ -162,7 +162,7 @@ export async function exportProductsWorkbook(filters?: ProductListQuery): Promis
       is_featured: p.isFeatured ? 'yes' : '',
       is_bestseller: p.isBestseller ? 'yes' : '',
       is_new: p.isNew ? 'yes' : '',
-      weight_g: p.weightUnit === 'kg' ? p.weightValue * 1000 : p.weightValue,
+      weight_g: p.weightValue == null ? null : p.weightUnit === 'kg' ? p.weightValue * 1000 : p.weightValue,
       length_cm: p.dimLength,
       width_cm: p.dimWidth,
       height_cm: p.dimHeight,
