@@ -15,7 +15,7 @@ function sessionFrom(res: { headers: Record<string, unknown> }) {
   const raw = res.headers['set-cookie'];
   const lines = Array.isArray(raw) ? raw as string[] : typeof raw === 'string' ? [raw] : [];
   const cookie = lines.map((line) => line.split(';')[0]).join('; ');
-  const csrf = lines.find((line) => line.startsWith('ys_csrf='))?.match(/^ys_csrf=([^;]+)/)?.[1];
+  const csrf = lines.find((line) => line.startsWith('ys_customer_csrf='))?.match(/^ys_customer_csrf=([^;]+)/)?.[1];
   if (!cookie.includes('ys_customer_session=') || !csrf) throw new Error('Customer session cookies were not issued.');
   return { cookie, csrf };
 }

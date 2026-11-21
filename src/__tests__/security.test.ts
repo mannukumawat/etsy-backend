@@ -27,10 +27,10 @@ function asArray(raw: unknown): string[] {
   return typeof raw === 'string' ? [raw] : [];
 }
 
-function csrfFromSetCookie(setCookie: unknown): string {
-  const line = asArray(setCookie).find((c) => c.startsWith('ys_csrf='));
-  const match = line?.match(/ys_csrf=([^;]+)/);
-  if (!match) throw new Error('No ys_csrf cookie in response');
+function csrfFromSetCookie(setCookie: unknown, cookieName = 'ys_csrf'): string {
+  const line = asArray(setCookie).find((c) => c.startsWith(`${cookieName}=`));
+  const match = line?.match(new RegExp(`${cookieName}=([^;]+)`));
+  if (!match) throw new Error(`No ${cookieName} cookie in response`);
   return match[1];
 }
 
@@ -170,7 +170,7 @@ describe('customer profile avatar persistence', () => {
     expect(register.status).toBe(201);
     expect(register.body.customer.phone).toBe('9876500000');
     const cookies = cookieHeader(register.headers['set-cookie']);
-    const csrf = csrfFromSetCookie(register.headers['set-cookie']);
+    const csrf = csrfFromSetCookie(register.headers['set-cookie'], 'ys_customer_csrf');
 
     const upload = await request(app)
       .post('/api/customer/profile/avatar')

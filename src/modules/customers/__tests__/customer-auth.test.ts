@@ -22,8 +22,8 @@ function setCookieLines(res: { headers: Record<string, unknown> }): string[] {
 function sessionFrom(res: { headers: Record<string, unknown> }) {
   const lines = setCookieLines(res);
   const cookie = lines.map((line) => line.split(';')[0]).join('; ');
-  const csrfLine = lines.find((line) => line.startsWith('ys_csrf='));
-  const csrf = csrfLine?.match(/^ys_csrf=([^;]+)/)?.[1];
+  const csrfLine = lines.find((line) => line.startsWith('ys_customer_csrf='));
+  const csrf = csrfLine?.match(/^ys_customer_csrf=([^;]+)/)?.[1];
   if (!cookie.includes('ys_customer_session=') || !csrf) throw new Error('Customer session cookies were not issued.');
   return { cookie, csrf };
 }
@@ -53,7 +53,7 @@ describe('customer auth integration', () => {
 
     const cookieLines = setCookieLines(register);
     const sessionLine = cookieLines.find((line) => line.startsWith('ys_customer_session='));
-    const csrfLine = cookieLines.find((line) => line.startsWith('ys_csrf='));
+    const csrfLine = cookieLines.find((line) => line.startsWith('ys_customer_csrf='));
     expect(sessionLine).toMatch(/HttpOnly/);
     expect(sessionLine).toMatch(/Path=\//);
     expect(sessionLine).toMatch(/SameSite=Lax/);

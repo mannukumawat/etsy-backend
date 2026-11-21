@@ -7,7 +7,7 @@ import { prisma } from '../../shared/database/prisma.js';
 import { badRequest, conflict } from '../../shared/errors/http-error.js';
 import { sendMail } from '../../shared/mail/mailer.js';
 import { CUSTOMER_ISSUER, TOKEN_AUDIENCE, revokeToken, sweepExpiredRevocations } from '../../shared/auth/revocation.js';
-import { clearCsrfCookie, issueCsrfCookie } from '../../shared/middleware/csrf.middleware.js';
+import { clearCsrfCookie, CUSTOMER_CSRF_COOKIE, issueCsrfCookie } from '../../shared/middleware/csrf.middleware.js';
 import { CUSTOMER_SESSION_COOKIE, type CustomerClaims } from '../../shared/middleware/customer-auth.middleware.js';
 import { RESET_TOKEN_TTL_MS, newResetToken, sha256Hex } from '../../shared/utils/crypto.js';
 import type { CustomerRegisterInput } from './customer.schema.js';
@@ -30,7 +30,7 @@ export function issueCustomerSession(res: Response, customer: { id: string; emai
     maxAge: env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
   });
-  issueCsrfCookie(res, env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000);
+  return issueCsrfCookie(res, env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000, CUSTOMER_CSRF_COOKIE);
 }
 
 /**
@@ -43,7 +43,7 @@ export function clearCustomerSession(res: Response, rawToken?: string) {
   if (rawToken) void revokeToken(rawToken, 'customer').catch(() => {});
   void sweepExpiredRevocations().catch(() => {});
   res.clearCookie(CUSTOMER_SESSION_COOKIE, { httpOnly: true, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
-  clearCsrfCookie(res);
+  clearCsrfCookie(res, CUSTOMER_CSRF_COOKIE);
 }
 
 export async function verifyCustomerCredentials(email: string, password: string) {

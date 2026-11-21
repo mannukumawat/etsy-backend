@@ -24,11 +24,12 @@ import { forbidden } from '../errors/http-error.js';
 // issues one) rather than silently skipping the check.
 
 export const CSRF_COOKIE = 'ys_csrf';
+export const CUSTOMER_CSRF_COOKIE = 'ys_customer_csrf';
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export function issueCsrfCookie(res: Response, maxAgeMs: number) {
+export function issueCsrfCookie(res: Response, maxAgeMs: number, cookieName = CSRF_COOKIE) {
   const token = randomBytes(32).toString('hex');
-  res.cookie(CSRF_COOKIE, token, {
+  res.cookie(cookieName, token, {
     httpOnly: false, // must be readable by the app's own JS to echo back as a header
     sameSite: env.isProd ? 'none' : 'lax',
     secure: env.isProd,
@@ -38,8 +39,8 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number) {
   return token;
 }
 
-export function clearCsrfCookie(res: Response) {
-  res.clearCookie(CSRF_COOKIE, { httpOnly: false, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
+export function clearCsrfCookie(res: Response, cookieName = CSRF_COOKIE) {
+  res.clearCookie(cookieName, { httpOnly: false, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -60,7 +61,8 @@ export function requireCsrf(req: Request, _res: Response, next: NextFunction) {
   const authed = Boolean(req.owner || req.customer);
   if (!authed) return next();
 
-  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[CSRF_COOKIE];
+  const cookieName = req.path.startsWith('/api/admin/') ? CSRF_COOKIE : CUSTOMER_CSRF_COOKIE;
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[cookieName];
   const headerToken = req.get('x-csrf-token');
   if (!cookieToken || !headerToken || !safeEqual(cookieToken, headerToken)) {
     return next(forbidden('Missing or invalid CSRF token. Refresh the page and try again.'));

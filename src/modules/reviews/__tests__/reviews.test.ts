@@ -18,7 +18,7 @@ function asArray(raw: unknown): string[] {
 }
 function session(setCookie: unknown) {
   const lines = asArray(setCookie);
-  const csrf = lines.find((c) => c.startsWith('ys_csrf='))?.match(/ys_csrf=([^;]+)/)?.[1] ?? '';
+  const csrf = lines.find((c) => c.startsWith('ys_customer_csrf='))?.match(/ys_customer_csrf=([^;]+)/)?.[1] ?? '';
   return { cookie: lines.map((c) => c.split(';')[0]).join('; '), csrf };
 }
 

@@ -4,6 +4,7 @@ import { prisma } from '../../shared/database/prisma.js';
 import { notFound, unauthorized } from '../../shared/errors/http-error.js';
 import { route } from '../../shared/http/async-route.js';
 import { requireCustomer } from '../../shared/middleware/customer-auth.middleware.js';
+import { CUSTOMER_CSRF_COOKIE, issueCsrfCookie } from '../../shared/middleware/csrf.middleware.js';
 import {
   customerLoginAccountLimiter,
   customerLoginIpLimiter,
@@ -35,8 +36,8 @@ customerAuthRouter.post(
   route(async (req, res) => {
     const input = customerRegisterSchema.parse(req.body);
     const customer = await registerCustomer(input);
-    issueCustomerSession(res, customer);
-    res.status(201).json({ customer: toCustomerPublic(customer) });
+    const csrfToken = issueCustomerSession(res, customer);
+    res.status(201).json({ customer: toCustomerPublic(customer), csrfToken });
   }),
 );
 
@@ -48,8 +49,8 @@ customerAuthRouter.post(
     const { email, password } = customerLoginSchema.parse(req.body);
     const customer = await verifyCustomerCredentials(email, password);
     if (!customer) throw unauthorized('Email or password is incorrect.');
-    issueCustomerSession(res, customer);
-    res.json({ customer: toCustomerPublic(customer) });
+    const csrfToken = issueCustomerSession(res, customer);
+    res.json({ customer: toCustomerPublic(customer), csrfToken });
   }),
 );
 
@@ -62,7 +63,9 @@ customerAuthRouter.get('/me', requireCustomer, async (req, res, next) => {
   try {
     const customer = await prisma.customer.findUnique({ where: { id: req.customer!.sub } });
     if (!customer) throw unauthorized();
-    res.json({ customer: toCustomerPublic(customer) });
+    const existingToken = (req.cookies as Record<string, string> | undefined)?.[CUSTOMER_CSRF_COOKIE];
+    const csrfToken = existingToken || issueCsrfCookie(res, env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000, CUSTOMER_CSRF_COOKIE);
+    res.json({ customer: toCustomerPublic(customer), csrfToken });
   } catch (e) {
     next(e);
   }
