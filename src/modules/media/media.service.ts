@@ -221,8 +221,7 @@ export async function importMediaFromUrl(input: MediaUrlImportInput) {
  */
 export async function deleteMedia(id: string): Promise<{ detached: number }> {
   const row = await prisma.media.findUnique({ where: { id }, select: { id: true, cloudinaryId: true } });
-  if (!row) throw notFound('Image not found.');
-  if (row.cloudinaryId && isCloudinaryConfigured) {
+  if (row?.cloudinaryId && isCloudinaryConfigured) {
     await cloudinary.uploader.destroy(row.cloudinaryId).catch((err) => {
       logger.warn('cloudinary destroy failed for deleted media', { mediaId: id, cloudinaryId: row.cloudinaryId, error: errorMessage(err) });
     });
@@ -235,7 +234,9 @@ export async function deleteMedia(id: string): Promise<{ detached: number }> {
     await tx.collection.updateMany({ where: { heroImageId: id }, data: { heroImageId: null } });
     await tx.collectionCircle.updateMany({ where: { imageId: id }, data: { imageId: null } });
     await tx.storeSettings.updateMany({ where: { logoId: id }, data: { logoId: null } });
-    await tx.media.delete({ where: { id } });
+    if (row) {
+      await tx.media.delete({ where: { id } }).catch(() => {});
+    }
     return productImages.count;
   });
 
@@ -244,7 +245,7 @@ export async function deleteMedia(id: string): Promise<{ detached: number }> {
 
 export async function getMediaUsages(id: string): Promise<Array<{ kind: string; label: string; href: string }>> {
   const row = await prisma.media.findUnique({ where: { id }, select: { id: true } });
-  if (!row) throw notFound('Image not found.');
+  if (!row) return [];
 
   const usages: Array<{ kind: string; label: string; href: string }> = [];
 
