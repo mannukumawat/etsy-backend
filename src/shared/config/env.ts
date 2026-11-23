@@ -44,6 +44,7 @@ const schema = z.object({
   // `iss`/`aud` claims (see src/shared/auth/revocation.ts) plus a separate cookie name,
   // so a token minted for one realm can never be replayed in the other.
   CUSTOMER_SESSION_TTL_HOURS: z.coerce.number().positive().default(24 * 7),
+  COOKIE_DOMAIN: z.string().optional(),
 
   // --- Email (password reset) ---------------------------------------------------------------------
   // All optional. Without them, reset emails are not sent: the reset link is logged to the server
@@ -133,6 +134,7 @@ export const env = {
   ...parsed.data,
   corsOrigins: parsed.data.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === 'production',
+  cookieDomain: parsed.data.COOKIE_DOMAIN || (parsed.data.NODE_ENV === 'production' ? '.dignityartedgepvtltd.com' : undefined),
   trustProxy: parseTrustProxy(parsed.data.TRUST_PROXY),
 };
 

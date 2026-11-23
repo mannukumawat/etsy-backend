@@ -29,6 +29,7 @@ export function issueCustomerSession(res: Response, customer: { id: string; emai
     secure: env.isProd,
     maxAge: env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
+    domain: env.cookieDomain,
   });
   return issueCsrfCookie(res, env.CUSTOMER_SESSION_TTL_HOURS * 60 * 60 * 1000, CUSTOMER_CSRF_COOKIE);
 }
@@ -42,7 +43,13 @@ export function issueCustomerSession(res: Response, customer: { id: string; emai
 export function clearCustomerSession(res: Response, rawToken?: string) {
   if (rawToken) void revokeToken(rawToken, 'customer').catch(() => {});
   void sweepExpiredRevocations().catch(() => {});
-  res.clearCookie(CUSTOMER_SESSION_COOKIE, { httpOnly: true, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(CUSTOMER_SESSION_COOKIE, {
+    httpOnly: true,
+    sameSite: env.isProd ? 'none' : 'lax',
+    secure: env.isProd,
+    path: '/',
+    domain: env.cookieDomain,
+  });
   clearCsrfCookie(res, CUSTOMER_CSRF_COOKIE);
 }
 

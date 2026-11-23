@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const CONTENT_LANGS = ['de', 'fr', 'it', 'es'] as const;
+export const CONTENT_LANGS = ['de', 'fr', 'it', 'es', 'hi'] as const;
 export type ContentLang = (typeof CONTENT_LANGS)[number];
 
 export const upsertTranslationSchema = z.object({

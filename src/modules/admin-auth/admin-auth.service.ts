@@ -23,6 +23,7 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
     secure: env.isProd,
     maxAge: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
+    domain: env.cookieDomain,
   });
   return issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
 }
@@ -36,7 +37,13 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
 export function clearSession(res: Response, rawToken?: string) {
   if (rawToken) void revokeToken(rawToken, 'owner').catch(() => {});
   void sweepExpiredRevocations().catch(() => {});
-  res.clearCookie(OWNER_SESSION_COOKIE, { httpOnly: true, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(OWNER_SESSION_COOKIE, {
+    httpOnly: true,
+    sameSite: env.isProd ? 'none' : 'lax',
+    secure: env.isProd,
+    path: '/',
+    domain: env.cookieDomain,
+  });
   clearCsrfCookie(res);
 }
 

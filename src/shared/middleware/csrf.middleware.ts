@@ -35,12 +35,19 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number, cookieName = CS
     secure: env.isProd,
     maxAge: maxAgeMs,
     path: '/',
+    domain: env.cookieDomain,
   });
   return token;
 }
 
 export function clearCsrfCookie(res: Response, cookieName = CSRF_COOKIE) {
-  res.clearCookie(cookieName, { httpOnly: false, sameSite: env.isProd ? 'none' : 'lax', secure: env.isProd, path: '/' });
+  res.clearCookie(cookieName, {
+    httpOnly: false,
+    sameSite: env.isProd ? 'none' : 'lax',
+    secure: env.isProd,
+    path: '/',
+    domain: env.cookieDomain,
+  });
 }
 
 function safeEqual(a: string, b: string): boolean {

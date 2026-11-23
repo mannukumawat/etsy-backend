@@ -170,7 +170,7 @@ export async function computePreview(input: CheckoutTotalsInput, customerKey: st
 
 /** POST /totals: a side-effect-free preview of exactly what placing this cart would charge. */
 export async function previewCheckoutTotals(input: CheckoutTotalsInput, buyer: Buyer) {
-  const { resolved, stockIssues, quote, quotes, taxRate, totals, couponError } = await computePreview(input, customerKeyFor(buyer));
+  const { resolved, stockIssues, quote, quotes, taxRate, totals, couponError, context } = await computePreview(input, customerKeyFor(buyer));
 
   // Include wallet balance for signed-in customers so the checkout UI can show the wallet option.
   let wallet: WalletPreviewInfo | null = null;
