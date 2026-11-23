@@ -19,13 +19,14 @@ export function issueSession(res: Response, owner: { id: string; email: string; 
   });
   res.cookie(OWNER_SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: env.isProd ? 'none' : 'lax',
+    sameSite: 'lax',
     secure: env.isProd,
     maxAge: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
     path: '/',
     domain: env.cookieDomain,
   });
-  return issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
+  const csrfToken = issueCsrfCookie(res, env.SESSION_TTL_HOURS * 60 * 60 * 1000);
+  return { token, csrfToken };
 }
 
 /**
@@ -39,7 +40,7 @@ export function clearSession(res: Response, rawToken?: string) {
   void sweepExpiredRevocations().catch(() => {});
   res.clearCookie(OWNER_SESSION_COOKIE, {
     httpOnly: true,
-    sameSite: env.isProd ? 'none' : 'lax',
+    sameSite: 'lax',
     secure: env.isProd,
     path: '/',
     domain: env.cookieDomain,

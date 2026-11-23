@@ -19,13 +19,15 @@ adminAuthRouter.post(
     const { email, password } = loginSchema.parse(req.body);
     const owner = await verifyOwnerCredentials(email, password);
     if (!owner) throw unauthorized('Email or password is incorrect.');
-    const csrfToken = issueSession(res, owner);
-    res.json({ owner: { id: owner.id, email: owner.email, name: owner.name, role: 'owner' }, csrfToken });
+    const { token, csrfToken } = issueSession(res, owner);
+    res.json({ owner: { id: owner.id, email: owner.email, name: owner.name, role: 'owner' }, token, csrfToken });
   }),
 );
 
 adminAuthRouter.post('/logout', (req, res) => {
-  clearSession(res, req.cookies?.ys_owner_session);
+  const authHeader = req.header('authorization');
+  const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  clearSession(res, bearer || req.cookies?.ys_owner_session);
   res.json({ ok: true });
 });
 

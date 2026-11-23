@@ -31,7 +31,7 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number, cookieName = CS
   const token = randomBytes(32).toString('hex');
   res.cookie(cookieName, token, {
     httpOnly: false, // must be readable by the app's own JS to echo back as a header
-    sameSite: env.isProd ? 'none' : 'lax',
+    sameSite: 'lax',
     secure: env.isProd,
     maxAge: maxAgeMs,
     path: '/',
@@ -43,7 +43,7 @@ export function issueCsrfCookie(res: Response, maxAgeMs: number, cookieName = CS
 export function clearCsrfCookie(res: Response, cookieName = CSRF_COOKIE) {
   res.clearCookie(cookieName, {
     httpOnly: false,
-    sameSite: env.isProd ? 'none' : 'lax',
+    sameSite: 'lax',
     secure: env.isProd,
     path: '/',
     domain: env.cookieDomain,

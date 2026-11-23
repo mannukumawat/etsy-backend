@@ -28,7 +28,9 @@ declare global {
 }
 
 function readClaims(req: Request): OwnerClaims | null {
-  const raw = (req.cookies as Record<string, string> | undefined)?.[OWNER_SESSION_COOKIE];
+  const authHeader = req.header('authorization');
+  const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const raw = bearer || (req.cookies as Record<string, string> | undefined)?.[OWNER_SESSION_COOKIE];
   if (!raw) return null;
   try {
     const decoded = jwt.verify(raw, env.JWT_SECRET) as jwt.JwtPayload & OwnerClaims;
