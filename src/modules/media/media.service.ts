@@ -217,8 +217,9 @@ export async function importMediaFromUrl(input: MediaUrlImportInput) {
  * The Cloudinary destroy is best-effort and never fails the delete: a missing asset, an
  * unconfigured Cloudinary, or a network error still removes the row (an orphaned remote
  * asset is harmless; a row pointing at a deleted asset is not).
+ * Foreign key references (product images, categories, collections, settings) are safely detached.
  */
-export async function deleteMedia(id: string): Promise<void> {
+export async function deleteMedia(id: string): Promise<{ detached: number }> {
   const row = await prisma.media.findUnique({ where: { id }, select: { id: true, cloudinaryId: true } });
   if (!row) throw notFound('Image not found.');
   if (row.cloudinaryId && isCloudinaryConfigured) {
@@ -226,5 +227,70 @@ export async function deleteMedia(id: string): Promise<void> {
       logger.warn('cloudinary destroy failed for deleted media', { mediaId: id, cloudinaryId: row.cloudinaryId, error: errorMessage(err) });
     });
   }
-  await prisma.media.delete({ where: { id } });
+
+  const detached = await prisma.$transaction(async (tx) => {
+    const productImages = await tx.productImage.deleteMany({ where: { mediaId: id } });
+    await tx.category.updateMany({ where: { imageId: id }, data: { imageId: null } });
+    await tx.category.updateMany({ where: { bannerId: id }, data: { bannerId: null } });
+    await tx.collection.updateMany({ where: { heroImageId: id }, data: { heroImageId: null } });
+    await tx.collectionCircle.updateMany({ where: { imageId: id }, data: { imageId: null } });
+    await tx.storeSettings.updateMany({ where: { logoId: id }, data: { logoId: null } });
+    await tx.media.delete({ where: { id } });
+    return productImages.count;
+  });
+
+  return { detached };
+}
+
+export async function getMediaUsages(id: string): Promise<Array<{ kind: string; label: string; href: string }>> {
+  const row = await prisma.media.findUnique({ where: { id }, select: { id: true } });
+  if (!row) throw notFound('Image not found.');
+
+  const usages: Array<{ kind: string; label: string; href: string }> = [];
+
+  const productImages = await prisma.productImage.findMany({
+    where: { mediaId: id },
+    include: { product: { select: { id: true, nameEn: true } } },
+  });
+  for (const pi of productImages) {
+    usages.push({ kind: 'product', label: `Product: ${pi.product.nameEn}`, href: `/products/${pi.product.id}/edit` });
+  }
+
+  const categories = await prisma.category.findMany({
+    where: { OR: [{ imageId: id }, { bannerId: id }] },
+    select: { id: true, nameEn: true, imageId: true, bannerId: true },
+  });
+  for (const c of categories) {
+    if (c.imageId === id) usages.push({ kind: 'category-image', label: `Category image: ${c.nameEn}`, href: '/categories' });
+    if (c.bannerId === id) usages.push({ kind: 'category-banner', label: `Category banner: ${c.nameEn}`, href: '/categories' });
+  }
+
+  const collections = await prisma.collection.findMany({
+    where: { heroImageId: id },
+    select: { id: true, titleEn: true },
+  });
+  for (const col of collections) {
+    usages.push({ kind: 'collection-hero', label: `Collection: ${col.titleEn}`, href: '/collections' });
+  }
+
+  const storeSettings = await prisma.storeSettings.findFirst({
+    where: { logoId: id },
+    select: { nameEn: true },
+  });
+  if (storeSettings) {
+    usages.push({ kind: 'store-logo', label: `Store logo: ${storeSettings.nameEn}`, href: '/settings/store' });
+  }
+
+  return usages;
+}
+
+export async function updateMediaAlt(id: string, alt: { en: string; hi?: string }) {
+  const existing = await prisma.media.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) throw notFound('Image not found.');
+  const row = await prisma.media.update({
+    where: { id },
+    data: { altEn: alt.en.trim(), altHi: (alt.hi ?? '').trim() },
+    select: METADATA_SELECT,
+  });
+  return row;
 }
