@@ -3,7 +3,7 @@ import { prisma } from '../../shared/database/prisma.js';
 import { route } from '../../shared/http/async-route.js';
 import { toAdminCategory } from './category.mapper.js';
 import { categoryInputSchema } from './category.schema.js';
-import { createCategory, updateCategory } from './category.service.js';
+import { createCategory, deleteCategory, updateCategory } from './category.service.js';
 
 export const categoryRouter = Router();
 
@@ -33,5 +33,14 @@ categoryRouter.put(
     const input = categoryInputSchema.parse(req.body);
     const category = await updateCategory(req.params.id, input);
     res.json(category);
+  }),
+);
+
+categoryRouter.delete(
+  '/:id',
+  route(async (req, res) => {
+    const reassignTo = typeof req.query.reassignTo === 'string' ? req.query.reassignTo : undefined;
+    const result = await deleteCategory(req.params.id, reassignTo);
+    res.json(result);
   }),
 );
