@@ -12,9 +12,17 @@ export async function assertProductReferencesExist(input: ProductInput) {
     ]);
   }
   await assertMediaExists(input.images.map((i) => i.mediaId));
-  if (input.collectionId) {
-    const collection = await prisma.collection.findUnique({ where: { id: input.collectionId }, select: { id: true } });
+  if (input.collectionId?.trim()) {
+    const collection = await prisma.collection.findUnique({ where: { id: input.collectionId.trim() }, select: { id: true } });
     if (!collection) throw badRequest('Choose an existing collection.', [{ path: 'collectionId', message: 'Collection not found.' }]);
+  }
+  if (input.itemGroupId?.trim()) {
+    const group = await prisma.itemGroup.findUnique({ where: { id: input.itemGroupId.trim() }, select: { id: true } });
+    if (!group) throw badRequest('Choose an existing item group.', [{ path: 'itemGroupId', message: 'Item group not found.' }]);
+  }
+  if (input.navLinkId?.trim()) {
+    const link = await prisma.navLink.findUnique({ where: { id: input.navLinkId.trim() }, select: { id: true } });
+    if (!link) throw badRequest('Choose an existing nav link.', [{ path: 'navLinkId', message: 'Nav link not found.' }]);
   }
 }
 
