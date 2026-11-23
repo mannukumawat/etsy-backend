@@ -41,18 +41,18 @@ const base = {
   skipSuccessfulRequests: false,
 } as const;
 
-/** Owner and customer login: 10/min per IP, 5/min per attempted account. */
+/** Owner and customer login: 30/min per IP, 20/min per attempted account. */
 const LOGIN_WINDOW_MS = 60_000;
 const createLoginIpLimiter = () => rateLimit({
   ...base,
   windowMs: LOGIN_WINDOW_MS,
-  limit: 10,
+  limit: 30,
   handler: jsonHandler('Too many sign-in attempts from this network. Please wait a moment and try again.', LOGIN_WINDOW_MS),
 });
 const createLoginAccountLimiter = () => rateLimit({
   ...base,
   windowMs: LOGIN_WINDOW_MS,
-  limit: 5,
+  limit: 20,
   keyGenerator: emailKey,
   handler: jsonHandler('Too many sign-in attempts for this account. Please wait a moment and try again.', LOGIN_WINDOW_MS),
 });
