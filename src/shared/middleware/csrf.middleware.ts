@@ -68,6 +68,12 @@ export function requireCsrf(req: Request, _res: Response, next: NextFunction) {
   const authed = Boolean(req.owner || req.customer);
   if (!authed) return next();
 
+  // Requests authenticated explicitly via Authorization Bearer token header cannot be forged
+  // across sites (browsers cannot send custom headers without CORS preflight approval).
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    return next();
+  }
+
   const cookieName = req.path.startsWith('/api/admin/') ? CSRF_COOKIE : CUSTOMER_CSRF_COOKIE;
   const cookieToken = (req.cookies as Record<string, string> | undefined)?.[cookieName];
   const headerToken = req.get('x-csrf-token');
