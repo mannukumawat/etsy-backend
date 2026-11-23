@@ -1,0 +1,87 @@
+name: Deploy Backend to Hostinger
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    name: Build & Deploy Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Deploy to Hostinger via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 65002
+          script: |
+            set -e
+            export PATH="/opt/alt/alt-nodejs20/root/usr/bin:$PATH"
+            APP_DIR="/home/u323851671/domains/dignityartedgepvtltd.com/api/hbuilds/current/nodejs"
+            cd "$APP_DIR"
+
+            # Create/update .env
+            cat > .env << 'ENVEOF'
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            NODE_ENV=production
+            PORT=4000
+            CORS_ORIGINS=https://dignityartedgepvtltd.com,https://www.dignityartedgepvtltd.com,https://admin.dignityartedgepvtltd.com
+            PUBLIC_API_URL=https://api.dignityartedgepvtltd.com
+            STOREFRONT_PUBLIC_URL=https://dignityartedgepvtltd.com
+            ADMIN_APP_URL=https://admin.dignityartedgepvtltd.com
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            SESSION_TTL_HOURS=12
+            COOKIE_DOMAIN=.dignityartedgepvtltd.com
+            OWNER_EMAIL=${{ secrets.OWNER_EMAIL }}
+            OWNER_PASSWORD=${{ secrets.OWNER_PASSWORD }}
+            OWNER_NAME=Store Owner
+            PAYMENT_GATEWAY=razorpay
+            RAZORPAY_KEY_ID=${{ secrets.RAZORPAY_KEY_ID }}
+            RAZORPAY_KEY_SECRET=${{ secrets.RAZORPAY_KEY_SECRET }}
+            RAZORPAY_WEBHOOK_SECRET=${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+            WALLET_TOPUP_ENABLED=true
+            WALLET_TOPUP_MIN_CENTS=500
+            WALLET_TOPUP_MAX_CENTS=100000
+            FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
+            FIREBASE_CLIENT_EMAIL=${{ secrets.FIREBASE_CLIENT_EMAIL }}
+            FIREBASE_PRIVATE_KEY=${{ secrets.FIREBASE_PRIVATE_KEY }}
+            CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
+            CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
+            CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
+            ENVEOF
+
+            # Pull latest code
+            git pull origin master
+
+            # Install production dependencies
+            npm ci --omit=dev
+
+            # Generate Prisma client & run migrations
+            npx prisma generate
+            npx prisma migrate deploy
+
+            # Build TypeScript
+            npm run build
+
+            # Restart Node.js app (Hostinger LiteSpeed)
+            mkdir -p tmp && touch tmp/restart.txt
+
+            echo "Backend deployed successfully"
